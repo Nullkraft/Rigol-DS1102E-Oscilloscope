@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import glob
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -22,6 +23,8 @@ DEFAULT_GLOB_PATTERNS = (
     "/dev/usbmisc/usbtmc*",
     "/dev/usb/usbtmc*",
 )
+DEFAULT_DEVICE = "/dev/usbtmc0"
+RIGOL_VENDOR_ID = "1ab1"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
 _SCOPE_SETUP_CACHE: dict[str, dict[str, Any]] = {}
@@ -75,6 +78,50 @@ def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def read_sysfs_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+
+
+def find_usb_device_dir(sysfs_path: Path) -> Path | None:
+    for parent in (sysfs_path.resolve(), *sysfs_path.resolve().parents):
+        if (parent / "idVendor").exists() and (parent / "idProduct").exists():
+            return parent
+    return None
+
+
+def build_usbtmc_record(sysfs_path: Path) -> dict[str, Any]:
+    device = f"/dev/{sysfs_path.name}"
+    record: dict[str, Any] = {
+        "device": device,
+        "sysfs": str(sysfs_path),
+    }
+    usb_device_dir = find_usb_device_dir(sysfs_path)
+    if usb_device_dir is None:
+        return record
+
+    for key in ("idVendor", "idProduct", "manufacturer", "product", "serial"):
+        value = read_sysfs_text(usb_device_dir / key)
+        if value is not None:
+            record[key] = value
+    record["usb_path"] = usb_device_dir.name
+    return record
+
+
+def list_candidate_device_records() -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    for sysfs_path in sorted(Path("/sys/class/usbmisc").glob("usbtmc*")):
+        record = build_usbtmc_record(sysfs_path)
+        records[record["device"]] = record
+
+    for device in list_candidate_devices():
+        records.setdefault(device, {"device": device})
+
+    return [records[device] for device in sorted(records)]
+
+
 def list_candidate_devices() -> list[str]:
     devices: list[str] = []
     for pattern in DEFAULT_GLOB_PATTERNS:
@@ -82,7 +129,21 @@ def list_candidate_devices() -> list[str]:
     return sorted(set(devices))
 
 
+def resolve_default_device() -> str:
+    for record in list_candidate_device_records():
+        if record.get("idVendor", "").lower() == RIGOL_VENDOR_ID:
+            return str(record["device"])
+    return DEFAULT_DEVICE
+
+
+def resolve_device(device: str) -> str:
+    if device == DEFAULT_DEVICE:
+        return resolve_default_device()
+    return device
+
+
 def build_scope(device: str, delay: float, read_size: int) -> RigolDS1102E:
+    device = resolve_device(device)
     return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
 
 
@@ -133,6 +194,7 @@ def build_setup_snapshot(
     channels: list[int],
 ) -> dict[str, Any]:
     scope = build_scope(device, delay, read_size)
+    device = scope.device
     snapshot: dict[str, Any] = {
         "timestamp": utc_timestamp(),
         "device": device,
@@ -249,11 +311,13 @@ def normalize_channels(channels: list[int] | None) -> list[int]:
 
 
 @mcp.tool()
-def rigol_ds1102e_list_devices() -> dict[str, Any]:
+def list_ports() -> dict[str, Any]:
     """List likely USBTMC device nodes for the Rigol DS1102E."""
     return {
         "timestamp": utc_timestamp(),
         "devices": list_candidate_devices(),
+        "device_records": list_candidate_device_records(),
+        "resolved_default_device": resolve_default_device(),
         "patterns": list(DEFAULT_GLOB_PATTERNS),
     }
 
@@ -268,7 +332,7 @@ def rigol_ds1102e_identify(
     scope = build_scope(device, delay, read_size)
     return {
         "timestamp": utc_timestamp(),
-        "device": device,
+        "device": scope.device,
         "response": scope.identify(),
     }
 
@@ -284,7 +348,7 @@ def rigol_ds1102e_query(
     scope = build_scope(device, delay, read_size)
     return {
         "timestamp": utc_timestamp(),
-        "device": device,
+        "device": scope.device,
         "scpi": scpi,
         "response": scope.query(scpi, delay=delay, read_size=read_size),
     }
@@ -298,6 +362,7 @@ def rigol_ds1102e_write(
     """Send a SCPI command that does not expect a response."""
     scope = build_scope(device, delay=0.2, read_size=4096)
     scope.write(scpi)
+    device = scope.device
     mark_cache_stale(device, f"raw write: {scpi}")
     return {
         "timestamp": utc_timestamp(),
@@ -340,6 +405,7 @@ def rigol_ds1102e_snapshot_get(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
     """Return the cached setup snapshot, refreshing from the scope if missing or stale."""
+    device = resolve_device(device)
     cached = _SCOPE_SETUP_CACHE.get(device)
     if cached is not None and cached.get("cache", {}).get("state") == "fresh":
         return {
@@ -361,6 +427,7 @@ def rigol_ds1102e_snapshot_cached(
     device: str = "/dev/usbtmc0",
 ) -> dict[str, Any]:
     """Return the last stored setup snapshot without querying the scope."""
+    device = resolve_device(device)
     cached = _SCOPE_SETUP_CACHE.get(device)
     return {
         "timestamp": utc_timestamp(),
@@ -378,6 +445,7 @@ def rigol_ds1102e_snapshot_refresh(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
     """Read a full setup snapshot from the scope and store it in the server cache."""
+    device = resolve_device(device)
     return {
         "timestamp": utc_timestamp(),
         "device": device,
@@ -398,6 +466,7 @@ def rigol_ds1102e_apply_profile(
     if "snapshot" in profile and isinstance(profile["snapshot"], dict):
         profile = profile["snapshot"]
     scope = build_scope(device, delay, read_size)
+    device = scope.device
     writes: list[dict[str, Any]] = []
 
     for channel_key, settings in profile.get("channels", {}).items():
@@ -504,6 +573,7 @@ def rigol_ds1102e_protocol_command(
         raise ValueError(f"protocol command is excluded: {key}")
 
     scope = build_scope(device, delay, read_size)
+    device = scope.device
     result: dict[str, Any] = {
         "timestamp": utc_timestamp(),
         "device": device,
