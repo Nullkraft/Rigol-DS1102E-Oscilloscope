@@ -7,9 +7,13 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import glob
+import os
 from pathlib import Path
+import threading
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -28,6 +32,9 @@ RIGOL_VENDOR_ID = "1ab1"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
 _SCOPE_SETUP_CACHE: dict[str, dict[str, Any]] = {}
+_ACTIVE_DEVICE: str | None = None
+_ACTIVE_DEVICE_FD: int | None = None
+_DEVICE_FD_LOCK = threading.Lock()
 
 SNAPSHOT_CHANNEL_KEYS = (
     ("display", "channel_display_get"),
@@ -147,6 +154,65 @@ def build_scope(device: str, delay: float, read_size: int) -> RigolDS1102E:
     return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
 
 
+def active_device_fd(scope: RigolDS1102E) -> int:
+    global _ACTIVE_DEVICE, _ACTIVE_DEVICE_FD
+    if _ACTIVE_DEVICE_FD is not None and _ACTIVE_DEVICE != scope.device:
+        os.close(_ACTIVE_DEVICE_FD)
+        _ACTIVE_DEVICE_FD = None
+        _ACTIVE_DEVICE = None
+    if _ACTIVE_DEVICE_FD is None:
+        _ACTIVE_DEVICE_FD = scope._open_device()
+        _ACTIVE_DEVICE = scope.device
+    return _ACTIVE_DEVICE_FD
+
+
+def close_active_device_fd() -> None:
+    global _ACTIVE_DEVICE, _ACTIVE_DEVICE_FD
+    if _ACTIVE_DEVICE_FD is not None:
+        os.close(_ACTIVE_DEVICE_FD)
+    _ACTIVE_DEVICE_FD = None
+    _ACTIVE_DEVICE = None
+
+
+def rebuild_scope(scope: RigolDS1102E) -> RigolDS1102E:
+    if scope.device == DEFAULT_DEVICE:
+        return build_scope(DEFAULT_DEVICE, scope.query_delay, scope.read_size)
+    return scope
+
+
+def scope_write(scope: RigolDS1102E, scpi: str) -> None:
+    payload = scope._normalize_command(scpi)
+    with _DEVICE_FD_LOCK:
+        try:
+            os.write(active_device_fd(scope), payload)
+        except OSError:
+            close_active_device_fd()
+            scope = rebuild_scope(scope)
+            os.write(active_device_fd(scope), payload)
+
+
+def scope_query(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
+    response = scope_query_bytes(scope, scpi, delay, read_size)
+    return response.decode("ascii", "replace").replace("\x00", "").strip()
+
+
+def scope_query_bytes(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
+    payload = scope._normalize_command(scpi)
+    with _DEVICE_FD_LOCK:
+        try:
+            fd = active_device_fd(scope)
+            os.write(fd, payload)
+            time.sleep(delay)
+            return os.read(fd, read_size)
+        except OSError:
+            close_active_device_fd()
+            scope = rebuild_scope(scope)
+            fd = active_device_fd(scope)
+            os.write(fd, payload)
+            time.sleep(delay)
+            return os.read(fd, read_size)
+
+
 def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
     return not is_excluded_command(command.template)
@@ -162,7 +228,7 @@ def query_protocol_value(
     scpi = render_command(key, **(params or {}))
     if is_excluded_command(scpi):
         raise ValueError(f"protocol command is excluded: {key}")
-    return scope.query(scpi, delay=delay, read_size=read_size)
+    return scope_query(scope, scpi, delay, read_size)
 
 
 def write_protocol_value(
@@ -173,8 +239,39 @@ def write_protocol_value(
     scpi = render_command(key, **(params or {}))
     if is_excluded_command(scpi):
         raise ValueError(f"protocol command is excluded: {key}")
-    scope.write(scpi)
+    scope_write(scope, scpi)
     return scpi
+
+
+def query_raw_bytes(
+    scope: RigolDS1102E,
+    scpi: str,
+    delay: float,
+    read_size: int,
+) -> bytes:
+    return scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
+
+
+def encode_waveform_data(data: bytes, encoding: str) -> Any:
+    if encoding == "list":
+        return list(data)
+    if encoding == "base64":
+        return base64.b64encode(data).decode("ascii")
+    if encoding == "hex":
+        return data.hex()
+    if encoding == "none":
+        return None
+    raise ValueError("encoding must be one of: list, base64, hex, none")
+
+
+def summarize_waveform_data(data: bytes) -> dict[str, Any]:
+    return {
+        "length": len(data),
+        "minimum": min(data) if data else None,
+        "maximum": max(data) if data else None,
+        "unique_values": len(set(data)),
+        "first_16_hex": data[:16].hex(" "),
+    }
 
 
 def mark_cache_stale(device: str, reason: str) -> None:
@@ -198,7 +295,7 @@ def build_setup_snapshot(
     snapshot: dict[str, Any] = {
         "timestamp": utc_timestamp(),
         "device": device,
-        "identity": scope.identify(),
+        "identity": scope_query(scope, "*IDN?", delay, read_size),
         "channels": {},
         "timebase": {},
         "trigger": {},
@@ -333,7 +430,7 @@ def rigol_ds1102e_identify(
     return {
         "timestamp": utc_timestamp(),
         "device": scope.device,
-        "response": scope.identify(),
+        "response": scope_query(scope, "*IDN?", delay, read_size),
     }
 
 
@@ -350,7 +447,7 @@ def rigol_ds1102e_query(
         "timestamp": utc_timestamp(),
         "device": scope.device,
         "scpi": scpi,
-        "response": scope.query(scpi, delay=delay, read_size=read_size),
+        "response": scope_query(scope, scpi, delay, read_size),
     }
 
 
@@ -361,7 +458,7 @@ def rigol_ds1102e_write(
 ) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
     scope = build_scope(device, delay=0.2, read_size=4096)
-    scope.write(scpi)
+    scope_write(scope, scpi)
     device = scope.device
     mark_cache_stale(device, f"raw write: {scpi}")
     return {
@@ -559,6 +656,96 @@ def rigol_ds1102e_apply_profile(
 
 
 @mcp.tool()
+def rigol_ds1102e_scope_setup(
+    device: str = "/dev/usbtmc0",
+    channels: list[int] | None = None,
+    trigger_mode: str = "EDGE",
+    sweep: str = "NORMAL",
+    points_mode: str = "RAW",
+    run: bool = False,
+    delay: float = 0.2,
+    read_size: int = 4096,
+) -> dict[str, Any]:
+    """Prepare the scope for normal-trigger RAW waveform capture."""
+    scope = build_scope(device, delay, read_size)
+    device = scope.device
+    selected_channels = normalize_channels(channels)
+    writes: list[dict[str, Any]] = []
+
+    for channel in selected_channels:
+        params = {"channel": channel, "state": "ON"}
+        scpi = write_protocol_value(scope, "channel_display_set", params)
+        writes.append({"key": "channel_display_set", "params": params, "scpi": scpi})
+
+    for key, params in (
+        ("trigger_mode_set", {"mode": trigger_mode}),
+        ("trigger_sweep_set", {"mode": trigger_mode, "sweep": sweep}),
+        ("waveform_points_mode_set", {"points_mode": points_mode}),
+    ):
+        scpi = write_protocol_value(scope, key, params)
+        writes.append({"key": key, "params": params, "scpi": scpi})
+
+    if run:
+        scpi = write_protocol_value(scope, "run")
+        writes.append({"key": "run", "params": {}, "scpi": scpi})
+
+    mark_cache_stale(device, "scope setup applied")
+    return {
+        "timestamp": utc_timestamp(),
+        "device": device,
+        "status": "ok",
+        "writes": writes,
+        "cache_state": "stale",
+    }
+
+
+@mcp.tool()
+def rigol_ds1102e_data_capture(
+    device: str = "/dev/usbtmc0",
+    channels: list[int] | None = None,
+    freeze: bool = True,
+    points_mode: str = "RAW",
+    encoding: str = "list",
+    delay: float = 0.2,
+    read_size: int = 1200000,
+) -> dict[str, Any]:
+    """Read currently displayed waveform bytes from selected channels."""
+    scope = build_scope(device, delay, read_size)
+    device = scope.device
+    selected_channels = normalize_channels(channels)
+    writes: list[dict[str, Any]] = []
+
+    if freeze:
+        scpi = write_protocol_value(scope, "stop")
+        writes.append({"key": "stop", "params": {}, "scpi": scpi})
+
+    params = {"points_mode": points_mode}
+    scpi = write_protocol_value(scope, "waveform_points_mode_set", params)
+    writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
+
+    captured_channels: dict[str, Any] = {}
+    for channel in selected_channels:
+        scpi = render_command("waveform_data_get", channel=channel)
+        data = query_raw_bytes(scope, scpi, delay, read_size)
+        captured_channels[str(channel)] = {
+            "scpi": scpi,
+            "summary": summarize_waveform_data(data),
+            "encoding": encoding,
+            "data": encode_waveform_data(data, encoding),
+        }
+
+    mark_cache_stale(device, "waveform data captured")
+    return {
+        "timestamp": utc_timestamp(),
+        "device": device,
+        "status": "ok",
+        "writes": writes,
+        "channels": captured_channels,
+        "cache_state": "stale",
+    }
+
+
+@mcp.tool()
 def rigol_ds1102e_protocol_command(
     key: str,
     params: dict[str, Any] | None = None,
@@ -583,10 +770,10 @@ def rigol_ds1102e_protocol_command(
         "scpi": scpi,
     }
     if command.kind == "query":
-        result["response"] = scope.query(scpi, delay=delay, read_size=read_size)
+        result["response"] = scope_query(scope, scpi, delay, read_size)
         return result
 
-    scope.write(scpi)
+    scope_write(scope, scpi)
     result["status"] = "ok"
     if command.changes_scope_state:
         mark_cache_stale(device, f"protocol write: {command.key}")
