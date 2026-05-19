@@ -3,7 +3,7 @@
   - :CHAN1:DISP ON
   - :CHAN2:DISP ON
   - :TRIGger:MODE EDGE
-  - :TRIGger:EDGE:SWEep NORM
+  - :TRIGger:EDGE:SWEep SING
   - :WAVeform:POINts:MODE RAW
   - :RUN
   - wait for the external LO1 cycle to happen
@@ -22,6 +22,10 @@
 
 
   returns raw byte waveform samples. NORM gives only 600 channel points. RAW gives memory data: 8192 points in normal memory for two channels, up to 524288 points in long memory for two channels. MAX is only useful stopped; while running it behaves like NORM.
+
+  Trigger offset (Changes the position of data found in the capture window)
+  - :tim:offset 20us
+  - :tim:offset?
 
   The usual DS1000E voltage conversion used by examples is:
 

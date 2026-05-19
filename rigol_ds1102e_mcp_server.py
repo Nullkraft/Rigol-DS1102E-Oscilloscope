@@ -341,9 +341,9 @@ def capture_waveform_channels(
     return writes, captured_channels
 
 
-def prepare_for_new_sweep(scope: RigolDS1102E, trigger_mode: str = "EDGE") -> list[dict[str, Any]]:
+def prepare_for_new_sweep(scope: RigolDS1102E, trigger_mode: str = "EDGE", sweep: str = "SINGLE") -> list[dict[str, Any]]:
     writes: list[dict[str, Any]] = []
-    params = {"mode": trigger_mode, "sweep": "NORMAL"}
+    params = {"mode": trigger_mode, "sweep": sweep}
     scpi = write_protocol_value(scope, "trigger_sweep_set", params)
     writes.append({"key": "trigger_sweep_set", "params": params, "scpi": scpi})
     scpi = write_protocol_value(scope, "run")
@@ -737,13 +737,13 @@ def rigol_ds1102e_scope_setup(
     device: str = "/dev/usbtmc0",
     channels: list[int] | None = None,
     trigger_mode: str = "EDGE",
-    sweep: str = "NORMAL",
+    sweep: str = "SINGLE",
     points_mode: str = "RAW",
     run: bool = False,
     delay: float = 0.2,
     read_size: int = 4096,
 ) -> dict[str, Any]:
-    """Prepare the scope for normal-trigger RAW waveform capture."""
+    """Prepare the scope for single-trigger RAW waveform capture."""
     scope = build_scope(device, delay, read_size)
     device = scope.device
     selected_channels = normalize_channels(channels)
