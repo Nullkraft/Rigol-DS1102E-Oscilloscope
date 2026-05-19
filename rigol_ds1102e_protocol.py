@@ -624,6 +624,8 @@ def is_excluded_command(scpi: str) -> bool:
 
 def _normalized_params(command: ScpiCommand, params: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(params)
+    if command.key == "timebase_scale_set" and "scale" in normalized:
+        normalized["scale"] = _format_timebase_scale(normalized["scale"])
     if "channel" in normalized:
         channel = int(normalized["channel"])
         if channel not in (1, 2):
@@ -641,6 +643,15 @@ def _normalized_params(command: ScpiCommand, params: dict[str, Any]) -> dict[str
         if name in normalized:
             normalized[name] = _normalize_enum(name, normalized[name], _ENUM_ALIASES[name])
     return normalized
+
+
+def _format_timebase_scale(value: Any) -> str:
+    seconds = float(value)
+    for suffix, factor in (("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)):
+        scaled = seconds / factor
+        if abs(scaled) >= 1.0:
+            return f"{scaled:.12g}{suffix}"
+    return f"{seconds / 1e-9:.12g}ns"
 
 
 def _normalize_enum(name: str, value: Any, aliases: dict[str, str]) -> str:

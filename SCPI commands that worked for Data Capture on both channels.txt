@@ -1,0 +1,23 @@
+For the final capture dump, the scope SCPI sequence was:
+
+  :TRIGger:STATus?
+  :WAVeform:POINts:MODE RAW
+  :STOP
+  :WAVeform:POINts:MODE RAW
+  :TRIGger:STATus?
+  :WAVeform:POINts:MODE?
+  :WAVeform:DATA? CHAN1
+  :WAVeform:DATA? CHAN2
+
+  The actual capture-freeze/read part was:
+
+  :STOP
+  :WAVeform:POINts:MODE RAW
+  :WAVeform:DATA? CHAN1
+  :WAVeform:DATA? CHAN2
+
+  Earlier, to put it in normal-trigger acquisition mode:
+
+  :TRIGger:EDGE:SWEep NORM
+  :WAVeform:POINts:MODE RAW
+  :RUN

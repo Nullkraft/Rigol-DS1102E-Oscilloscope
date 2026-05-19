@@ -1,0 +1,34 @@
+• The capture path in scope_spi_capture.py used this sequence:
+
+  - :CHAN1:DISP ON
+  - :CHAN2:DISP ON
+  - :TRIGger:MODE EDGE
+  - :TRIGger:EDGE:SWEep NORM
+  - :WAVeform:POINts:MODE RAW
+  - :RUN
+  - wait for the external LO1 cycle to happen
+  - After trigger...
+  - :STOP
+  - :WAVeform:POINts:MODE RAW
+  - :WAVeform:DATA? CHAN1
+  - :WAVeform:DATA? CHAN2
+
+  That flow is in setup_scope_for_normal_wait() and capture_scope() in scope_spi_capture.py:60 and scope_spi_capture.py:252.
+
+  If you meant only the final data read commands, it was just:
+
+  - :WAVeform:DATA? CHAN1
+  - :WAVeform:DATA? CHAN2
+
+
+  returns raw byte waveform samples. NORM gives only 600 channel points. RAW gives memory data: 8192 points in normal memory for two channels, up to 524288 points in long memory for two channels. MAX is only useful stopped; while running it behaves like NORM.
+
+  The usual DS1000E voltage conversion used by examples is:
+
+  volts = (240 - raw_byte) * volts_per_div / 25.0 - (vertical_offset + volts_per_div * 4.6)
+
+  and time can be built from sample rate:
+
+  time = sample_index / sample_rate
+
+  The main caveat is the response framing. Examples often strip a binary/TMC header before interpreting bytes, commonly around 10 bytes, but we should verify against the first real capture by printing the first 16-32 returned bytes from :WAV:DATA? CHAN1.

@@ -2,6 +2,7 @@
 # /// script
 # dependencies = [
 #   "mcp[cli]",
+#   "numpy",
 # ]
 # ///
 
@@ -20,6 +21,15 @@ from mcp.server.fastmcp import FastMCP
 
 from rigol_ds1102e import RigolDS1102E
 from rigol_ds1102e_protocol import PROTOCOL, get_command, is_excluded_command, render_command
+from rigol_ds1102e_spi_analysis import (
+    decode_spi_data_words,
+    decode_spi_data_words_windowed,
+    decoded_addresses,
+    detect_rising_edge_sample_indexes,
+    normalize_waveform_samples,
+    propose_time_scale,
+    validate_expected_addresses,
+)
 
 
 DEFAULT_GLOB_PATTERNS = (
@@ -252,6 +262,36 @@ def query_raw_bytes(
     return scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
 
 
+def query_waveform_bytes(
+    scope: RigolDS1102E,
+    scpi: str,
+    delay: float,
+    read_size: int,
+) -> bytes:
+    data = query_raw_bytes(scope, scpi, delay, read_size)
+    for _ in range(4):
+        if len(data) != 600 or read_size <= 600:
+            break
+        reread = query_raw_bytes(scope, scpi, delay, read_size)
+        if len(reread) > len(data):
+            data = reread
+        elif len(reread) != 600:
+            data = reread
+            break
+    return data
+
+
+def require_stopped_scope(scope: RigolDS1102E, delay: float, read_size: int, attempts: int = 20) -> str:
+    status = ""
+    for _ in range(attempts):
+        status = query_protocol_value(scope, "trigger_status", delay=delay, read_size=read_size).upper()
+        if status == "STOP":
+            return status
+        if status == "WAIT":
+            write_protocol_value(scope, "stop")
+    raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
+
+
 def encode_waveform_data(data: bytes, encoding: str) -> Any:
     if encoding == "list":
         return list(data)
@@ -272,6 +312,43 @@ def summarize_waveform_data(data: bytes) -> dict[str, Any]:
         "unique_values": len(set(data)),
         "first_16_hex": data[:16].hex(" "),
     }
+
+
+def capture_waveform_channels(
+    scope: RigolDS1102E,
+    selected_channels: list[int],
+    freeze: bool,
+    points_mode: str,
+    delay: float,
+    read_size: int,
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+    writes: list[dict[str, Any]] = []
+
+    if freeze:
+        scpi = write_protocol_value(scope, "stop")
+        writes.append({"key": "stop", "params": {}, "scpi": scpi})
+        require_stopped_scope(scope, delay, read_size)
+
+    params = {"points_mode": points_mode}
+    scpi = write_protocol_value(scope, "waveform_points_mode_set", params)
+    writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
+
+    captured_channels: dict[str, bytes] = {}
+    for channel in selected_channels:
+        scpi = render_command("waveform_data_get", channel=channel)
+        captured_channels[str(channel)] = query_waveform_bytes(scope, scpi, delay, read_size)
+
+    return writes, captured_channels
+
+
+def prepare_for_new_sweep(scope: RigolDS1102E, trigger_mode: str = "EDGE") -> list[dict[str, Any]]:
+    writes: list[dict[str, Any]] = []
+    params = {"mode": trigger_mode, "sweep": "NORMAL"}
+    scpi = write_protocol_value(scope, "trigger_sweep_set", params)
+    writes.append({"key": "trigger_sweep_set", "params": params, "scpi": scpi})
+    scpi = write_protocol_value(scope, "run")
+    writes.append({"key": "run", "params": {}, "scpi": scpi})
+    return writes
 
 
 def mark_cache_stale(device: str, reason: str) -> None:
@@ -713,22 +790,20 @@ def rigol_ds1102e_data_capture(
     scope = build_scope(device, delay, read_size)
     device = scope.device
     selected_channels = normalize_channels(channels)
-    writes: list[dict[str, Any]] = []
-
-    if freeze:
-        scpi = write_protocol_value(scope, "stop")
-        writes.append({"key": "stop", "params": {}, "scpi": scpi})
-
-    params = {"points_mode": points_mode}
-    scpi = write_protocol_value(scope, "waveform_points_mode_set", params)
-    writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
+    writes, raw_channels = capture_waveform_channels(
+        scope,
+        selected_channels,
+        freeze,
+        points_mode,
+        delay,
+        read_size,
+    )
 
     captured_channels: dict[str, Any] = {}
     for channel in selected_channels:
-        scpi = render_command("waveform_data_get", channel=channel)
-        data = query_raw_bytes(scope, scpi, delay, read_size)
+        data = raw_channels[str(channel)]
         captured_channels[str(channel)] = {
-            "scpi": scpi,
+            "scpi": render_command("waveform_data_get", channel=channel),
             "summary": summarize_waveform_data(data),
             "encoding": encoding,
             "data": encode_waveform_data(data, encoding),
@@ -741,6 +816,324 @@ def rigol_ds1102e_data_capture(
         "status": "ok",
         "writes": writes,
         "channels": captured_channels,
+        "cache_state": "stale",
+    }
+
+
+@mcp.tool()
+def rigol_ds1102e_spi_sample_indexes(
+    device: str = "/dev/usbtmc0",
+    clock_channel: int = 1,
+    data_channel: int = 2,
+    freeze: bool = True,
+    points_mode: str = "RAW",
+    threshold: int = 5,
+    slope_threshold: int = 10,
+    delay: float = 0.2,
+    read_size: int = 1200000,
+) -> dict[str, Any]:
+    """Return clock sample indexes for SPI analysis after normalizing both channels."""
+    if clock_channel == data_channel:
+        raise ValueError("clock_channel and data_channel must be different")
+
+    scope = build_scope(device, delay, read_size)
+    device = scope.device
+    writes, raw_channels = capture_waveform_channels(
+        scope,
+        [clock_channel, data_channel],
+        freeze,
+        points_mode,
+        delay,
+        read_size,
+    )
+
+    clock_samples = normalize_waveform_samples(raw_channels[str(clock_channel)])
+    data_samples = normalize_waveform_samples(raw_channels[str(data_channel)])
+    sample_indexes = detect_rising_edge_sample_indexes(
+        clock_samples,
+        threshold=threshold,
+        slope_threshold=slope_threshold,
+    )
+
+    mark_cache_stale(device, "SPI sample indexes analyzed")
+    return {
+        "timestamp": utc_timestamp(),
+        "device": device,
+        "status": "ok",
+        "writes": writes,
+        "clock_channel": clock_channel,
+        "data_channel": data_channel,
+        "threshold": threshold,
+        "slope_threshold": slope_threshold,
+        "sample_indexes": sample_indexes,
+        "clock_samples": {
+            "length": len(clock_samples),
+            "minimum": min(clock_samples) if clock_samples else None,
+            "maximum": max(clock_samples) if clock_samples else None,
+        },
+        "data_samples": {
+            "length": len(data_samples),
+            "minimum": min(data_samples) if data_samples else None,
+            "maximum": max(data_samples) if data_samples else None,
+        },
+        "cache_state": "stale",
+    }
+
+
+@mcp.tool()
+def rigol_ds1102e_spi_decode(
+    device: str = "/dev/usbtmc0",
+    clock_channel: int = 1,
+    data_channel: int = 2,
+    freeze: bool = True,
+    points_mode: str = "RAW",
+    threshold: int = 5,
+    slope_threshold: int = 10,
+    low_ratio: float = 0.2,
+    high_ratio: float = 0.8,
+    expected_writes: int | None = None,
+    expected_addresses: list[int] | None = None,
+    window_scan: bool = True,
+    max_extra_edges: int = 16,
+    time_scale: float | None = None,
+    auto_adjust: bool = True,
+    time_scale_margin: float = 1.5,
+    delay: float = 0.2,
+    read_size: int = 1200000,
+) -> dict[str, Any]:
+    """Capture, normalize, sample, and decode SPI words from two scope channels."""
+    if clock_channel == data_channel:
+        raise ValueError("clock_channel and data_channel must be different")
+    if not 1 <= threshold <= 20:
+        raise ValueError("threshold must be between 1 and 20")
+    if not 1 <= slope_threshold <= 20:
+        raise ValueError("slope_threshold must be between 1 and 20")
+    if not 0.05 <= low_ratio <= 0.4:
+        raise ValueError("low_ratio must be between 0.05 and 0.4")
+    if not 0.6 <= high_ratio <= 0.95:
+        raise ValueError("high_ratio must be between 0.6 and 0.95")
+    if expected_writes is not None and not 1 <= expected_writes <= 6:
+        raise ValueError("expected_writes must be between 1 and 6")
+    if expected_addresses is not None:
+        if not 1 <= len(expected_addresses) <= 6:
+            raise ValueError("expected_addresses must contain between 1 and 6 addresses")
+        for address in expected_addresses:
+            if not 0 <= int(address) <= 5:
+                raise ValueError("expected_addresses values must be between 0 and 5")
+        if expected_writes is not None and len(expected_addresses) != expected_writes:
+            raise ValueError("expected_addresses length must match expected_writes")
+        if expected_writes is None:
+            expected_writes = len(expected_addresses)
+    if not 0 <= max_extra_edges <= 16:
+        raise ValueError("max_extra_edges must be between 0 and 16")
+    if time_scale is not None and not 500e-9 <= time_scale <= 20e-6:
+        raise ValueError("time_scale must be between 500e-9 and 20e-6 seconds/div")
+    if not 1.0 <= time_scale_margin <= 2.0:
+        raise ValueError("time_scale_margin must be between 1.0 and 2.0")
+
+    scope = build_scope(device, delay, read_size)
+    device = scope.device
+    writes: list[dict[str, Any]] = []
+    current_time_scale = time_scale
+    if current_time_scale is None:
+        response = query_protocol_value(scope, "timebase_scale_get", delay=delay, read_size=read_size)
+        current_time_scale = float(response)
+    if time_scale is not None:
+        params = {"scale": time_scale}
+        scpi = write_protocol_value(scope, "timebase_scale_set", params)
+        writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
+
+    capture_writes, raw_channels = capture_waveform_channels(
+        scope,
+        [clock_channel, data_channel],
+        freeze,
+        points_mode,
+        delay,
+        read_size,
+    )
+    writes.extend(capture_writes)
+
+    clock_samples = normalize_waveform_samples(raw_channels[str(clock_channel)])
+    data_samples = normalize_waveform_samples(raw_channels[str(data_channel)])
+    sample_indexes = detect_rising_edge_sample_indexes(
+        clock_samples,
+        threshold=threshold,
+        slope_threshold=slope_threshold,
+    )
+    expected_edges = expected_writes * 32 if expected_writes is not None else None
+    observed_edges = len(sample_indexes)
+    if expected_edges is not None and auto_adjust:
+        edge_delta = observed_edges - expected_edges
+        if observed_edges < expected_edges or edge_delta > max_extra_edges:
+            proposed = propose_time_scale(
+                current_time_scale,
+                observed_edges,
+                expected_edges,
+                margin=time_scale_margin,
+                minimum=500e-9,
+                maximum=20e-6,
+            )
+            if proposed != current_time_scale:
+                params = {"scale": proposed}
+                scpi = write_protocol_value(scope, "timebase_scale_set", params)
+                writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
+            writes.extend(prepare_for_new_sweep(scope))
+
+            mark_cache_stale(device, "SPI decode adjusted time scale")
+            return {
+                "timestamp": utc_timestamp(),
+                "device": device,
+                "status": "needs_new_sweep",
+                "reason": "under_captured" if observed_edges < expected_edges else "over_captured",
+                "writes": writes,
+                "clock_channel": clock_channel,
+                "data_channel": data_channel,
+                "threshold": threshold,
+                "slope_threshold": slope_threshold,
+                "low_ratio": low_ratio,
+                "high_ratio": high_ratio,
+                "expected_writes": expected_writes,
+                "expected_edges": expected_edges,
+                "observed_edges": observed_edges,
+                "window_scan": window_scan,
+                "max_extra_edges": max_extra_edges,
+                "time_scale": current_time_scale,
+                "proposed_time_scale": proposed,
+                "time_scale_margin": time_scale_margin,
+                "sample_indexes": sample_indexes,
+                "clock_samples": {
+                    "length": len(clock_samples),
+                    "minimum": min(clock_samples) if clock_samples else None,
+                    "maximum": max(clock_samples) if clock_samples else None,
+                },
+                "data_samples": {
+                    "length": len(data_samples),
+                    "minimum": min(data_samples) if data_samples else None,
+                    "maximum": max(data_samples) if data_samples else None,
+                },
+                "cache_state": "stale",
+            }
+
+    if expected_writes is not None and window_scan:
+        try:
+            decoded = decode_spi_data_words_windowed(
+                data_samples,
+                sample_indexes,
+                expected_writes=expected_writes,
+                max_extra_edges=max_extra_edges,
+                low_ratio=low_ratio,
+                high_ratio=high_ratio,
+                expected_addresses=expected_addresses,
+            )
+        except ValueError as exc:
+            if expected_addresses is None or expected_edges is None or not auto_adjust:
+                raise
+
+            diagnostic_decoded = decode_spi_data_words_windowed(
+                data_samples,
+                sample_indexes,
+                expected_writes=expected_writes,
+                max_extra_edges=max_extra_edges,
+                low_ratio=low_ratio,
+                high_ratio=high_ratio,
+            )
+            proposed = propose_time_scale(
+                current_time_scale,
+                observed_edges,
+                expected_edges,
+                margin=time_scale_margin,
+                minimum=500e-9,
+                maximum=20e-6,
+            )
+            if proposed != current_time_scale:
+                params = {"scale": proposed}
+                scpi = write_protocol_value(scope, "timebase_scale_set", params)
+                writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
+            writes.extend(prepare_for_new_sweep(scope))
+
+            mark_cache_stale(device, "SPI decode adjusted time scale after address mismatch")
+            return {
+                "timestamp": utc_timestamp(),
+                "device": device,
+                "status": "needs_new_sweep",
+                "reason": "address_pattern_mismatch",
+                "error": str(exc),
+                "writes": writes,
+                "clock_channel": clock_channel,
+                "data_channel": data_channel,
+                "threshold": threshold,
+                "slope_threshold": slope_threshold,
+                "low_ratio": low_ratio,
+                "high_ratio": high_ratio,
+                "expected_writes": expected_writes,
+                "expected_addresses": expected_addresses,
+                "expected_edges": expected_edges,
+                "observed_edges": observed_edges,
+                "observed_addresses": decoded_addresses(diagnostic_decoded),
+                "diagnostic_decoded": diagnostic_decoded,
+                "window_scan": window_scan,
+                "max_extra_edges": max_extra_edges,
+                "time_scale": current_time_scale,
+                "proposed_time_scale": proposed,
+                "time_scale_margin": time_scale_margin,
+                "sample_indexes": sample_indexes,
+                "clock_samples": {
+                    "length": len(clock_samples),
+                    "minimum": min(clock_samples) if clock_samples else None,
+                    "maximum": max(clock_samples) if clock_samples else None,
+                },
+                "data_samples": {
+                    "length": len(data_samples),
+                    "minimum": min(data_samples) if data_samples else None,
+                    "maximum": max(data_samples) if data_samples else None,
+                },
+                "cache_state": "stale",
+            }
+        selected_indexes = sample_indexes[
+            decoded["window"]["selected_start"] : decoded["window"]["selected_stop"]  # type: ignore[index]
+        ]
+    else:
+        decoded = decode_spi_data_words(
+            data_samples,
+            sample_indexes,
+            low_ratio=low_ratio,
+            high_ratio=high_ratio,
+        )
+        validate_expected_addresses(decoded, expected_addresses)
+        selected_indexes = sample_indexes
+
+    mark_cache_stale(device, "SPI data decoded")
+    return {
+        "timestamp": utc_timestamp(),
+        "device": device,
+        "status": "ok",
+        "writes": writes,
+        "clock_channel": clock_channel,
+        "data_channel": data_channel,
+        "threshold": threshold,
+        "slope_threshold": slope_threshold,
+        "low_ratio": low_ratio,
+        "high_ratio": high_ratio,
+        "expected_writes": expected_writes,
+        "expected_addresses": expected_addresses,
+        "window_scan": window_scan,
+        "max_extra_edges": max_extra_edges,
+        "time_scale": current_time_scale,
+        "auto_adjust": auto_adjust,
+        "time_scale_margin": time_scale_margin,
+        "sample_indexes": sample_indexes,
+        "selected_sample_indexes": selected_indexes,
+        "clock_samples": {
+            "length": len(clock_samples),
+            "minimum": min(clock_samples) if clock_samples else None,
+            "maximum": max(clock_samples) if clock_samples else None,
+        },
+        "data_samples": {
+            "length": len(data_samples),
+            "minimum": min(data_samples) if data_samples else None,
+            "maximum": max(data_samples) if data_samples else None,
+        },
+        "decoded": decoded,
         "cache_state": "stale",
     }
 

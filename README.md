@@ -4,7 +4,7 @@ If you get a reading with no numbers, use `rigol_ds1102e_protocol_command` with 
 
 MCP tools:
 
-- `rigol_ds1102e_list_devices()`
+- `list_ports()`
 - `rigol_ds1102e_identify(device="/dev/usbtmc0", delay=0.2, read_size=4096)`
 - `rigol_ds1102e_query(scpi, device="/dev/usbtmc0", delay=0.2, read_size=4096)`
 - `rigol_ds1102e_write(scpi, device="/dev/usbtmc0")`
@@ -14,6 +14,10 @@ MCP tools:
 - `rigol_ds1102e_snapshot_cached(device="/dev/usbtmc0")`
 - `rigol_ds1102e_snapshot_refresh(device="/dev/usbtmc0", delay=0.2, read_size=4096, channels=None)`
 - `rigol_ds1102e_apply_profile(profile, device="/dev/usbtmc0", delay=0.2, read_size=4096, refresh_after=True)`
+- `rigol_ds1102e_scope_setup(device="/dev/usbtmc0", channels=None, trigger_mode="EDGE", sweep="NORMAL", points_mode="RAW", run=False, delay=0.2, read_size=4096)`
+- `rigol_ds1102e_data_capture(device="/dev/usbtmc0", channels=None, freeze=True, points_mode="RAW", encoding="list", delay=0.2, read_size=1200000)`
+- `rigol_ds1102e_spi_sample_indexes(device="/dev/usbtmc0", clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, delay=0.2, read_size=1200000)`
+- `rigol_ds1102e_spi_decode(device="/dev/usbtmc0", clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, auto_adjust=True, time_scale_margin=1.5, delay=0.2, read_size=1200000)`
 
 For `rigol_ds1102e_protocol_command`, `key` must match a supported command key from `rigol_ds1102e_list_protocol_commands()`. `params` is a JSON object whose fields match that key's `args`. Examples: `{"channel": 1}` for `channel_scale_get`, `{"channel": 1, "scale": 0.5}` for `channel_scale_set`.
 
@@ -21,9 +25,15 @@ Settings snapshots read identity, channel setup, timebase, trigger, acquire, wav
 
 `rigol_ds1102e_apply_profile` accepts a profile map with optional `channels`, `timebase`, `trigger`, `acquire`, `waveform`, and `session` sections, applies those settings, and refreshes the cache by default. Measurement protocol commands remain direct/live scope queries.
 
+`rigol_ds1102e_data_capture` captures selected waveform channels with no one's-complement, normalization, thresholding, or edge detection. Use it for raw single-channel or combined CH1/CH2 capture. With `freeze=True`, the shared capture helper sends `:STOP` and verifies `:TRIGger:STATus?` reports `STOP` before waveform reads, resending `:STOP` if the scope reports `WAIT`. If the stopped scope returns the known short 600-byte waveform response, the helper rereads the channel a few times before returning data.
+
+`rigol_ds1102e_spi_sample_indexes` captures the two waveform channels, one's-complements and normalizes both, then returns the clock-derived sample indexes used for SPI data analysis on channel 2.
+
+`rigol_ds1102e_spi_decode` uses the same internal capture helper as `rigol_ds1102e_data_capture`, then applies SPI-specific processing: one's-complement and normalize CH1/CH2 independently, detect rising-edge sample indexes from the clock channel, decode the data channel as MSB-first 32-bit words, and return decoded hex values plus the low-3-bit address map. For wider captures, set `expected_writes` and leave `window_scan=True`; the tool expects `expected_writes * 32` clock edges and can recover from up to `max_extra_edges` leading/trailing edges. Set `expected_addresses` to require a MAX2871 register-address pattern such as `[4, 1, 0]`; if `expected_writes` is omitted, it is inferred from the address list length. When `auto_adjust=True`, under-capture, excessive over-capture, or a decoded address-pattern mismatch returns `status="needs_new_sweep"` after setting a proposed wider time scale, normal trigger sweep mode, and `:RUN`. Bounded tuning inputs are `threshold=1..20`, `slope_threshold=1..20`, `low_ratio=0.05..0.4`, `high_ratio=0.6..0.95`, `expected_writes=1..6`, `expected_addresses` values `0..5`, `max_extra_edges=0..16`, `time_scale=500e-9..20e-6` seconds/div, and `time_scale_margin=1.0..2.0`.
+
 Example calls:
 
-- `rigol_ds1102e_list_devices()`
+- `list_ports()`
 - `rigol_ds1102e_identify(device="/dev/usbtmc0")`
 - `rigol_ds1102e_protocol_command(key="channel_scale_get", params={"channel": 1})`
 - `rigol_ds1102e_snapshot_get(device="/dev/usbtmc0", channels=[1])`
