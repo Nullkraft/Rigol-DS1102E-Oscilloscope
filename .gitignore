@@ -6,10 +6,12 @@ __pycache__/
 .codex
 *pdf
 docs/
-Data Capture SCPI command steps that worked.txt
+*kate-swp
 
 ## Research Documentation
+Data Capture SCPI command steps that worked.txt
 O'Scope sample intervals
+QUESTIONS.md
 
 ## AI Notes and Tools
 TOMORROW.md
