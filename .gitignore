@@ -5,6 +5,7 @@ pyvenv.cfg
 __pycache__/
 .codex
 *pdf
+docs/
 Data Capture SCPI command steps that worked.txt
 
 ## Research Documentation
