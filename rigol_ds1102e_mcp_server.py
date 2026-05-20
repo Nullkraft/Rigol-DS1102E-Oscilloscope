@@ -896,7 +896,6 @@ def rigol_ds1102e_spi_decode(
     window_scan: bool = True,
     max_extra_edges: int = 16,
     time_scale: float | None = None,
-    auto_adjust: bool = True,
     time_scale_margin: float = 1.5,
     delay: float = 0.2,
     read_size: int = 1200000,
@@ -962,57 +961,6 @@ def rigol_ds1102e_spi_decode(
     )
     expected_edges = expected_writes * 32 if expected_writes is not None else None
     observed_edges = len(sample_indexes)
-    if expected_edges is not None and auto_adjust:
-        edge_delta = observed_edges - expected_edges
-        if observed_edges < expected_edges or edge_delta > max_extra_edges:
-            proposed = propose_time_scale(
-                current_time_scale,
-                observed_edges,
-                expected_edges,
-                margin=time_scale_margin,
-                minimum=500e-9,
-                maximum=20e-6,
-            )
-            if proposed != current_time_scale:
-                params = {"scale": proposed}
-                scpi = write_protocol_value(scope, "timebase_scale_set", params)
-                writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
-            writes.extend(prepare_for_new_sweep(scope))
-
-            mark_cache_stale(device, "SPI decode adjusted time scale")
-            return {
-                "timestamp": utc_timestamp(),
-                "device": device,
-                "status": "needs_new_sweep",
-                "reason": "under_captured" if observed_edges < expected_edges else "over_captured",
-                "writes": writes,
-                "clock_channel": clock_channel,
-                "data_channel": data_channel,
-                "threshold": threshold,
-                "slope_threshold": slope_threshold,
-                "low_ratio": low_ratio,
-                "high_ratio": high_ratio,
-                "expected_writes": expected_writes,
-                "expected_edges": expected_edges,
-                "observed_edges": observed_edges,
-                "window_scan": window_scan,
-                "max_extra_edges": max_extra_edges,
-                "time_scale": current_time_scale,
-                "proposed_time_scale": proposed,
-                "time_scale_margin": time_scale_margin,
-                "sample_indexes": sample_indexes,
-                "clock_samples": {
-                    "length": len(clock_samples),
-                    "minimum": min(clock_samples) if clock_samples else None,
-                    "maximum": max(clock_samples) if clock_samples else None,
-                },
-                "data_samples": {
-                    "length": len(data_samples),
-                    "minimum": min(data_samples) if data_samples else None,
-                    "maximum": max(data_samples) if data_samples else None,
-                },
-                "cache_state": "stale",
-            }
 
     if expected_writes is not None and window_scan:
         try:
@@ -1025,70 +973,10 @@ def rigol_ds1102e_spi_decode(
                 high_ratio=high_ratio,
                 expected_addresses=expected_addresses,
             )
-        except ValueError as exc:
-            if expected_addresses is None or expected_edges is None or not auto_adjust:
+        except ValueError:
+            if expected_addresses is None or expected_edges is None:
                 raise
-
-            diagnostic_decoded = decode_spi_data_words_windowed(
-                data_samples,
-                sample_indexes,
-                expected_writes=expected_writes,
-                max_extra_edges=max_extra_edges,
-                low_ratio=low_ratio,
-                high_ratio=high_ratio,
-            )
-            proposed = propose_time_scale(
-                current_time_scale,
-                observed_edges,
-                expected_edges,
-                margin=time_scale_margin,
-                minimum=500e-9,
-                maximum=20e-6,
-            )
-            if proposed != current_time_scale:
-                params = {"scale": proposed}
-                scpi = write_protocol_value(scope, "timebase_scale_set", params)
-                writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
-            writes.extend(prepare_for_new_sweep(scope))
-
-            mark_cache_stale(device, "SPI decode adjusted time scale after address mismatch")
-            return {
-                "timestamp": utc_timestamp(),
-                "device": device,
-                "status": "needs_new_sweep",
-                "reason": "address_pattern_mismatch",
-                "error": str(exc),
-                "writes": writes,
-                "clock_channel": clock_channel,
-                "data_channel": data_channel,
-                "threshold": threshold,
-                "slope_threshold": slope_threshold,
-                "low_ratio": low_ratio,
-                "high_ratio": high_ratio,
-                "expected_writes": expected_writes,
-                "expected_addresses": expected_addresses,
-                "expected_edges": expected_edges,
-                "observed_edges": observed_edges,
-                "observed_addresses": decoded_addresses(diagnostic_decoded),
-                "diagnostic_decoded": diagnostic_decoded,
-                "window_scan": window_scan,
-                "max_extra_edges": max_extra_edges,
-                "time_scale": current_time_scale,
-                "proposed_time_scale": proposed,
-                "time_scale_margin": time_scale_margin,
-                "sample_indexes": sample_indexes,
-                "clock_samples": {
-                    "length": len(clock_samples),
-                    "minimum": min(clock_samples) if clock_samples else None,
-                    "maximum": max(clock_samples) if clock_samples else None,
-                },
-                "data_samples": {
-                    "length": len(data_samples),
-                    "minimum": min(data_samples) if data_samples else None,
-                    "maximum": max(data_samples) if data_samples else None,
-                },
-                "cache_state": "stale",
-            }
+            raise
         selected_indexes = sample_indexes[
             decoded["window"]["selected_start"] : decoded["window"]["selected_stop"]  # type: ignore[index]
         ]
@@ -1119,7 +1007,6 @@ def rigol_ds1102e_spi_decode(
         "window_scan": window_scan,
         "max_extra_edges": max_extra_edges,
         "time_scale": current_time_scale,
-        "auto_adjust": auto_adjust,
         "time_scale_margin": time_scale_margin,
         "sample_indexes": sample_indexes,
         "selected_sample_indexes": selected_indexes,
