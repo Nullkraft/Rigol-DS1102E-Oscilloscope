@@ -523,8 +523,8 @@ EXCLUDED_COMMANDS: tuple[str, ...] = (
 )
 
 EXCLUDED_PREFIXES: tuple[str, ...] = (
-    ":BEEP",
-    ":KEY:",
+    ":BEEP:",   # Annoying!
+    ":KEY:",    # Duplicates all other non-KEY SCPI commands
 )
 
 _ENUM_ALIASES: dict[str, dict[str, str]] = {
