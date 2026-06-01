@@ -4,6 +4,7 @@ lib64
 pyvenv.cfg
 __pycache__/
 .codex
+*txt
 *pdf
 docs/
 *kate-swp
