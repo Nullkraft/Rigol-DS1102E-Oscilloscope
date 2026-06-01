@@ -519,7 +519,7 @@ PROTOCOL: dict[str, ScpiCommand] = {
 
 
 EXCLUDED_COMMANDS: tuple[str, ...] = (
-    ":STORage:FACTory:LOAD",
+    ":STORage:FACTory:LOAD",    # Restores the system settings as the were before leaving factory.
 )
 
 EXCLUDED_PREFIXES: tuple[str, ...] = (
