@@ -938,14 +938,6 @@ def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
     return not is_excluded_command(command.template)
 
-def query_raw_bytes(
-    scope: RigolDS1102E,
-    scpi: str,
-    delay: float,
-    read_size: int,
-) -> bytes:
-    return _MANAGED_SCOPE.query_raw_bytes(scope, scpi, delay, read_size)
-
 
 def encode_waveform_data(data: bytes, encoding: str) -> Any:
     if encoding == "list":
