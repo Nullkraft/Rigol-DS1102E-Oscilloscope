@@ -2,6 +2,8 @@
 
 If you get a reading with no numbers, use `rigol_ds1102e_protocol_command` with `key="auto_setup"` or send `:AUTO`.
 
+Canonical scope selection is now done by probing every plausible `usbtmc` device with `*IDN?` and selecting the one that reports `RIGOL TECHNOLOGIES,DS1102E`. The server does not trust `/dev/usbtmc` numbering for identity, and operational calls do not trust a caller-supplied device path when the scope can be identified directly.
+
 MCP tools:
 
 - `list_ports()`
@@ -20,6 +22,8 @@ MCP tools:
 - `rigol_ds1102e_spi_decode(device="/dev/usbtmc0", clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, time_scale_margin=1.5, delay=0.2, read_size=1200000)`
 
 For `rigol_ds1102e_protocol_command`, `key` must match a supported command key from `rigol_ds1102e_list_protocol_commands()`. `params` is a JSON object whose fields match that key's `args`. Examples: `{"channel": 1}` for `channel_scale_get`, `{"channel": 1, "scale": 0.5}` for `channel_scale_set`.
+
+The `device` argument remains in the tool schemas for compatibility, but canonical scope selection is determined by IDN probing rather than by trusting `/dev/usbtmc0` or any other caller-supplied device path.
 
 Settings snapshots read identity, channel setup, timebase, trigger, acquire, waveform point mode, and trigger status directly from the scope. `rigol_ds1102e_snapshot_get` returns the cached snapshot when it is fresh and refreshes only when the cache is missing or stale. `rigol_ds1102e_snapshot_cached` never queries the scope. `rigol_ds1102e_snapshot_refresh` always queries the scope and stores a fresh snapshot.
 
@@ -42,6 +46,13 @@ Example calls:
 - `rigol_ds1102e_apply_profile(profile={"channels":{"1":{"display":true,"coupling":"DC","scale":0.5}},"timebase":{"scale":0.001},"trigger":{"mode":"EDGE","source":"CHAN1","level":0.0},"acquire":{"type":"NORM"}}, device="/dev/usbtmc0")`
 
 To test the Rigol MCP through a real stdio client in the local environment, run `./bin/mcp dev rigol_ds1102e_mcp_server.py` from the repo root.
+
+`list_ports()` now reports:
+
+- `devices`: plausible USBTMC nodes
+- `device_records`: sysfs-derived metadata hints
+- `resolved_default_device`: the DS1102E found by `*IDN?`, or `null`
+- `resolved_default_error`: the discovery error string when no DS1102E is found
 
 Example Inspector calls for `rigol_ds1102e_protocol_command`:
 
