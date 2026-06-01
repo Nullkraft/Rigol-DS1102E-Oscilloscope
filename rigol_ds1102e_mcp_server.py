@@ -506,6 +506,81 @@ class ManagedScopeState:
             "snapshot": snapshot,
         }
 
+    def scope_setup(
+        self,
+        device: str,
+        channels: list[int],
+        trigger_mode: str,
+        sweep: str,
+        points_mode: str,
+        run: bool,
+        delay: float,
+        read_size: int,
+    ) -> dict[str, Any]:
+        scope = self.build_scope(device, delay, read_size)
+        device = scope.device
+        writes: list[dict[str, Any]] = []
+
+        for channel in channels:
+            params = {"channel": channel, "state": "ON"}
+            scpi = write_protocol_value(scope, "channel_display_set", params)
+            writes.append({"key": "channel_display_set", "params": params, "scpi": scpi})
+
+        for key, params in (
+            ("trigger_mode_set", {"mode": trigger_mode}),
+            ("trigger_sweep_set", {"mode": trigger_mode, "sweep": sweep}),
+            ("waveform_points_mode_set", {"points_mode": points_mode}),
+        ):
+            scpi = write_protocol_value(scope, key, params)
+            writes.append({"key": key, "params": params, "scpi": scpi})
+
+        if run:
+            scpi = write_protocol_value(scope, "run")
+            writes.append({"key": "run", "params": {}, "scpi": scpi})
+
+        self.mark_cache_stale(device, "scope setup applied")
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "status": "ok",
+            "writes": writes,
+            "cache_state": "stale",
+        }
+
+    def protocol_command(
+        self,
+        key: str,
+        params: dict[str, Any] | None,
+        device: str,
+        delay: float,
+        read_size: int,
+    ) -> dict[str, Any]:
+        command = get_command(key)
+        scpi = render_command(key, **(params or {}))
+        if is_excluded_command(scpi):
+            raise ValueError(f"protocol command is excluded: {key}")
+
+        scope = self.build_scope(device, delay, read_size)
+        device = scope.device
+        result: dict[str, Any] = {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "key": command.key,
+            "family": command.family,
+            "kind": command.kind,
+            "scpi": scpi,
+        }
+        if command.kind == "query":
+            result["response"] = self.scope_query(scope, scpi, delay, read_size)
+            return result
+
+        self.scope_write(scope, scpi)
+        result["status"] = "ok"
+        if command.changes_scope_state:
+            self.mark_cache_stale(device, f"protocol write: {command.key}")
+            result["cache_state"] = "stale"
+        return result
+
     def mark_cache_stale(self, device: str, reason: str) -> None:
         cached = self.scope_setup_cache.get(device)
         if cached is not None:
@@ -790,36 +865,16 @@ def rigol_ds1102e_scope_setup(
     read_size: int = 4096,
 ) -> dict[str, Any]:
     """Prepare the scope for single-trigger RAW waveform capture."""
-    scope = build_scope(device, delay, read_size)
-    device = scope.device
-    selected_channels = normalize_channels(channels)
-    writes: list[dict[str, Any]] = []
-
-    for channel in selected_channels:
-        params = {"channel": channel, "state": "ON"}
-        scpi = write_protocol_value(scope, "channel_display_set", params)
-        writes.append({"key": "channel_display_set", "params": params, "scpi": scpi})
-
-    for key, params in (
-        ("trigger_mode_set", {"mode": trigger_mode}),
-        ("trigger_sweep_set", {"mode": trigger_mode, "sweep": sweep}),
-        ("waveform_points_mode_set", {"points_mode": points_mode}),
-    ):
-        scpi = write_protocol_value(scope, key, params)
-        writes.append({"key": key, "params": params, "scpi": scpi})
-
-    if run:
-        scpi = write_protocol_value(scope, "run")
-        writes.append({"key": "run", "params": {}, "scpi": scpi})
-
-    mark_cache_stale(device, "scope setup applied")
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "status": "ok",
-        "writes": writes,
-        "cache_state": "stale",
-    }
+    return _MANAGED_SCOPE.scope_setup(
+        device,
+        normalize_channels(channels),
+        trigger_mode,
+        sweep,
+        points_mode,
+        run,
+        delay,
+        read_size,
+    )
 
 
 @mcp.tool()
@@ -1080,31 +1135,7 @@ def rigol_ds1102e_protocol_command(
     read_size: int = 4096,
 ) -> dict[str, Any]:
     """Execute a supported protocol command by key using the registry metadata."""
-    command = get_command(key)
-    scpi = render_command(key, **(params or {}))
-    if is_excluded_command(scpi):
-        raise ValueError(f"protocol command is excluded: {key}")
-
-    scope = build_scope(device, delay, read_size)
-    device = scope.device
-    result: dict[str, Any] = {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "key": command.key,
-        "family": command.family,
-        "kind": command.kind,
-        "scpi": scpi,
-    }
-    if command.kind == "query":
-        result["response"] = scope_query(scope, scpi, delay, read_size)
-        return result
-
-    scope_write(scope, scpi)
-    result["status"] = "ok"
-    if command.changes_scope_state:
-        mark_cache_stale(device, f"protocol write: {command.key}")
-        result["cache_state"] = "stale"
-    return result
+    return _MANAGED_SCOPE.protocol_command(key, params, device, delay, read_size)
 
 
 def main() -> None:
