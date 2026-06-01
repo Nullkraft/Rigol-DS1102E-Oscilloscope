@@ -216,6 +216,35 @@ class ManagedScopeState:
     def query_raw_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
         return self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
 
+    def identify(self, device: str, delay: float, read_size: int) -> dict[str, Any]:
+        scope = self.build_scope(device, delay, read_size)
+        return {
+            "timestamp": utc_timestamp(),
+            "device": scope.device,
+            "response": self.scope_query(scope, "*IDN?", delay, read_size),
+        }
+
+    def query(self, scpi: str, device: str, delay: float, read_size: int) -> dict[str, Any]:
+        scope = self.build_scope(device, delay, read_size)
+        return {
+            "timestamp": utc_timestamp(),
+            "device": scope.device,
+            "scpi": scpi,
+            "response": self.scope_query(scope, scpi, delay, read_size),
+        }
+
+    def write(self, scpi: str, device: str) -> dict[str, Any]:
+        scope = self.build_scope(device, delay=0.2, read_size=4096)
+        self.scope_write(scope, scpi)
+        device = scope.device
+        self.mark_cache_stale(device, f"raw write: {scpi}")
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "scpi": scpi,
+            "status": "ok",
+        }
+
     def mark_cache_stale(self, device: str, reason: str) -> None:
         cached = self.scope_setup_cache.get(device)
         if cached is not None:
@@ -541,12 +570,7 @@ def rigol_ds1102e_identify(
     read_size: int = 4096,
 ) -> dict[str, Any]:
     """Query *IDN? from the scope."""
-    scope = build_scope(device, delay, read_size)
-    return {
-        "timestamp": utc_timestamp(),
-        "device": scope.device,
-        "response": scope_query(scope, "*IDN?", delay, read_size),
-    }
+    return _MANAGED_SCOPE.identify(device, delay, read_size)
 
 
 @mcp.tool()
@@ -557,13 +581,7 @@ def rigol_ds1102e_query(
     read_size: int = 4096,
 ) -> dict[str, Any]:
     """Send a SCPI query and return the response."""
-    scope = build_scope(device, delay, read_size)
-    return {
-        "timestamp": utc_timestamp(),
-        "device": scope.device,
-        "scpi": scpi,
-        "response": scope_query(scope, scpi, delay, read_size),
-    }
+    return _MANAGED_SCOPE.query(scpi, device, delay, read_size)
 
 
 @mcp.tool()
@@ -572,16 +590,7 @@ def rigol_ds1102e_write(
     device: str = "/dev/usbtmc0",
 ) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
-    scope = build_scope(device, delay=0.2, read_size=4096)
-    scope_write(scope, scpi)
-    device = scope.device
-    mark_cache_stale(device, f"raw write: {scpi}")
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "scpi": scpi,
-        "status": "ok",
-    }
+    return _MANAGED_SCOPE.write(scpi, device)
 
 
 @mcp.tool()
