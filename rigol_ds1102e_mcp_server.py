@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# /// script
+# /// 'uv' inline script metadependencies
 # dependencies = [
 #   "mcp[cli]",
 #   "numpy",
