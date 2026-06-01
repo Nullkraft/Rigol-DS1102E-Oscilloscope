@@ -22,10 +22,8 @@ from rigol_ds1102e_protocol import PROTOCOL, get_command, is_excluded_command, r
 from rigol_ds1102e_spi_analysis import (
     decode_spi_data_words,
     decode_spi_data_words_windowed,
-    decoded_addresses,
     detect_rising_edge_sample_indexes,
     normalize_waveform_samples,
-    propose_time_scale,
     validate_expected_addresses,
 )
 
@@ -525,24 +523,8 @@ def resolve_default_device() -> str:
     return _MANAGED_SCOPE.resolve_default_device()
 
 
-def resolve_device(device: str) -> str:
-    return _MANAGED_SCOPE.resolve_device(device)
-
-
 def build_scope(device: str, delay: float, read_size: int) -> RigolDS1102E:
     return _MANAGED_SCOPE.build_scope(device, delay, read_size)
-
-
-def active_device_fd(scope: RigolDS1102E) -> int:
-    return _MANAGED_SCOPE.active_device_fd_for_scope(scope)
-
-
-def close_active_device_fd() -> None:
-    _MANAGED_SCOPE.close_active_device_fd()
-
-
-def rebuild_scope(scope: RigolDS1102E) -> RigolDS1102E:
-    return _MANAGED_SCOPE.rebuild_scope(scope)
 
 
 def scope_write(scope: RigolDS1102E, scpi: str) -> None:
@@ -551,10 +533,6 @@ def scope_write(scope: RigolDS1102E, scpi: str) -> None:
 
 def scope_query(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
     return _MANAGED_SCOPE.scope_query(scope, scpi, delay, read_size)
-
-
-def scope_query_bytes(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
-    return _MANAGED_SCOPE.scope_query_bytes(scope, scpi, delay, read_size)
 
 
 def is_supported_protocol_command(key: str) -> bool:
@@ -673,16 +651,6 @@ def capture_waveform_channels(
         captured_channels[str(channel)] = query_waveform_bytes(scope, scpi, delay, read_size)
 
     return writes, captured_channels
-
-
-def prepare_for_new_sweep(scope: RigolDS1102E, trigger_mode: str = "EDGE", sweep: str = "SINGLE") -> list[dict[str, Any]]:
-    writes: list[dict[str, Any]] = []
-    params = {"mode": trigger_mode, "sweep": sweep}
-    scpi = write_protocol_value(scope, "trigger_sweep_set", params)
-    writes.append({"key": "trigger_sweep_set", "params": params, "scpi": scpi})
-    scpi = write_protocol_value(scope, "run")
-    writes.append({"key": "run", "params": {}, "scpi": scpi})
-    return writes
 
 
 def mark_cache_stale(device: str, reason: str) -> None:
