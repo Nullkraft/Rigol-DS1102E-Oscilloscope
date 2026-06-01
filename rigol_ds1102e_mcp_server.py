@@ -239,6 +239,68 @@ class ManagedScopeState:
     def query_raw_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
         return self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
 
+    def query_waveform_bytes(
+        self,
+        scope: RigolDS1102E,
+        scpi: str,
+        delay: float,
+        read_size: int,
+    ) -> bytes:
+        data = self.query_raw_bytes(scope, scpi, delay, read_size)
+        for _ in range(4):
+            if len(data) != 600 or read_size <= 600:
+                break
+            reread = self.query_raw_bytes(scope, scpi, delay, read_size)
+            if len(reread) > len(data):
+                data = reread
+            elif len(reread) != 600:
+                data = reread
+                break
+        return data
+
+    def require_stopped_scope(
+        self,
+        scope: RigolDS1102E,
+        delay: float,
+        read_size: int,
+        attempts: int = 20,
+    ) -> str:
+        status = ""
+        for _ in range(attempts):
+            status = self.protocol_query(scope, "trigger_status", delay=delay, read_size=read_size).upper()
+            if status == "STOP":
+                return status
+            if status == "WAIT":
+                self.protocol_write(scope, "stop")
+        raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
+
+    def capture_waveform_channels(
+        self,
+        scope: RigolDS1102E,
+        selected_channels: list[int],
+        freeze: bool,
+        points_mode: str,
+        delay: float,
+        read_size: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+        writes: list[dict[str, Any]] = []
+
+        if freeze:
+            scpi = self.protocol_write(scope, "stop")
+            writes.append({"key": "stop", "params": {}, "scpi": scpi})
+            self.require_stopped_scope(scope, delay, read_size)
+
+        params = {"points_mode": points_mode}
+        scpi = self.protocol_write(scope, "waveform_points_mode_set", params)
+        writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
+
+        captured_channels: dict[str, bytes] = {}
+        for channel in selected_channels:
+            scpi = render_command("waveform_data_get", channel=channel)
+            captured_channels[str(channel)] = self.query_waveform_bytes(scope, scpi, delay, read_size)
+
+        return writes, captured_channels
+
     def identify(self, device: str, delay: float, read_size: int) -> dict[str, Any]:
         scope = self.build_scope(device, delay, read_size)
         return {
@@ -585,7 +647,7 @@ class ManagedScopeState:
         scope = self.build_scope(device, delay, read_size)
         device = scope.device
         selected_channels = normalize_channels(channels)
-        writes, raw_channels = capture_waveform_channels(
+        writes, raw_channels = self.capture_waveform_channels(
             scope,
             selected_channels,
             freeze,
@@ -631,7 +693,7 @@ class ManagedScopeState:
 
         scope = self.build_scope(device, delay, read_size)
         device = scope.device
-        writes, raw_channels = capture_waveform_channels(
+        writes, raw_channels = self.capture_waveform_channels(
             scope,
             [clock_channel, data_channel],
             freeze,
@@ -733,7 +795,7 @@ class ManagedScopeState:
             scpi = self.protocol_write(scope, "timebase_scale_set", params)
             writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
 
-        capture_writes, raw_channels = capture_waveform_channels(
+        capture_writes, raw_channels = self.capture_waveform_channels(
             scope,
             [clock_channel, data_channel],
             freeze,
@@ -885,36 +947,6 @@ def query_raw_bytes(
     return _MANAGED_SCOPE.query_raw_bytes(scope, scpi, delay, read_size)
 
 
-def query_waveform_bytes(
-    scope: RigolDS1102E,
-    scpi: str,
-    delay: float,
-    read_size: int,
-) -> bytes:
-    data = query_raw_bytes(scope, scpi, delay, read_size)
-    for _ in range(4):
-        if len(data) != 600 or read_size <= 600:
-            break
-        reread = query_raw_bytes(scope, scpi, delay, read_size)
-        if len(reread) > len(data):
-            data = reread
-        elif len(reread) != 600:
-            data = reread
-            break
-    return data
-
-
-def require_stopped_scope(scope: RigolDS1102E, delay: float, read_size: int, attempts: int = 20) -> str:
-    status = ""
-    for _ in range(attempts):
-        status = _MANAGED_SCOPE.protocol_query(scope, "trigger_status", delay=delay, read_size=read_size).upper()
-        if status == "STOP":
-            return status
-        if status == "WAIT":
-            _MANAGED_SCOPE.protocol_write(scope, "stop")
-    raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
-
-
 def encode_waveform_data(data: bytes, encoding: str) -> Any:
     if encoding == "list":
         return list(data)
@@ -935,33 +967,6 @@ def summarize_waveform_data(data: bytes) -> dict[str, Any]:
         "unique_values": len(set(data)),
         "first_16_hex": data[:16].hex(" "),
     }
-
-
-def capture_waveform_channels(
-    scope: RigolDS1102E,
-    selected_channels: list[int],
-    freeze: bool,
-    points_mode: str,
-    delay: float,
-    read_size: int,
-) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
-    writes: list[dict[str, Any]] = []
-
-    if freeze:
-        scpi = _MANAGED_SCOPE.protocol_write(scope, "stop")
-        writes.append({"key": "stop", "params": {}, "scpi": scpi})
-        require_stopped_scope(scope, delay, read_size)
-
-    params = {"points_mode": points_mode}
-    scpi = _MANAGED_SCOPE.protocol_write(scope, "waveform_points_mode_set", params)
-    writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
-
-    captured_channels: dict[str, bytes] = {}
-    for channel in selected_channels:
-        scpi = render_command("waveform_data_get", channel=channel)
-        captured_channels[str(channel)] = query_waveform_bytes(scope, scpi, delay, read_size)
-
-    return writes, captured_channels
 
 def normalize_channels(channels: list[int] | None) -> list[int]:
     selected = channels or [1, 2]
