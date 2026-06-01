@@ -245,6 +245,167 @@ class ManagedScopeState:
             "status": "ok",
         }
 
+    def get_cached_snapshot(self, device: str) -> tuple[str, dict[str, Any] | None]:
+        device = self.resolve_device(device)
+        return device, self.scope_setup_cache.get(device)
+
+    def build_setup_snapshot(
+        self,
+        device: str,
+        delay: float,
+        read_size: int,
+        channels: list[int],
+    ) -> dict[str, Any]:
+        scope = self.build_scope(device, delay, read_size)
+        device = scope.device
+        snapshot: dict[str, Any] = {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "identity": self.scope_query(scope, "*IDN?", delay, read_size),
+            "channels": {},
+            "timebase": {},
+            "trigger": {},
+            "acquire": {},
+            "waveform": {},
+            "session": {},
+            "cache": {
+                "state": "fresh",
+                "reason": "snapshot_refresh",
+                "timestamp": utc_timestamp(),
+            },
+        }
+
+        visible_channels: list[int] = []
+        for channel in channels:
+            channel_settings: dict[str, str] = {}
+            for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
+                channel_settings[setting_name] = query_protocol_value(
+                    scope,
+                    command_key,
+                    {"channel": channel},
+                    delay,
+                    read_size,
+                )
+            if channel_settings.get("display") == "ON":
+                visible_channels.append(channel)
+            snapshot["channels"][str(channel)] = channel_settings
+
+        for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
+            snapshot["timebase"][setting_name] = query_protocol_value(
+                scope,
+                command_key,
+                delay=delay,
+                read_size=read_size,
+            )
+
+        trigger_mode = query_protocol_value(scope, "trigger_mode_get", delay=delay, read_size=read_size)
+        snapshot["trigger"]["mode"] = trigger_mode
+        snapshot["trigger"]["source"] = query_protocol_value(
+            scope,
+            "trigger_source_get",
+            {"mode": trigger_mode},
+            delay,
+            read_size,
+        )
+        snapshot["trigger"]["level"] = query_protocol_value(
+            scope,
+            "trigger_level_get",
+            {"mode": trigger_mode},
+            delay,
+            read_size,
+        )
+        snapshot["trigger"]["sweep"] = query_protocol_value(
+            scope,
+            "trigger_sweep_get",
+            {"mode": trigger_mode},
+            delay,
+            read_size,
+        )
+        snapshot["trigger"]["holdoff"] = query_protocol_value(
+            scope,
+            "trigger_holdoff_get",
+            delay=delay,
+            read_size=read_size,
+        )
+
+        for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
+            snapshot["acquire"][setting_name] = query_protocol_value(
+                scope,
+                command_key,
+                delay=delay,
+                read_size=read_size,
+            )
+        snapshot["acquire"]["sampling_rate"] = {}
+        for channel in visible_channels:
+            snapshot["acquire"]["sampling_rate"][str(channel)] = query_protocol_value(
+                scope,
+                "acquire_sampling_rate_get",
+                {"channel": channel},
+                delay,
+                read_size,
+            )
+
+        snapshot["waveform"]["points_mode"] = query_protocol_value(
+            scope,
+            "waveform_points_mode_get",
+            delay=delay,
+            read_size=read_size,
+        )
+        snapshot["session"]["trigger_status"] = query_protocol_value(
+            scope,
+            "trigger_status",
+            delay=delay,
+            read_size=read_size,
+        )
+        self.scope_setup_cache[device] = snapshot
+        return snapshot
+
+    def snapshot_get(
+        self,
+        device: str,
+        delay: float,
+        read_size: int,
+        channels: list[int],
+    ) -> dict[str, Any]:
+        device, cached = self.get_cached_snapshot(device)
+        if cached is not None and cached.get("cache", {}).get("state") == "fresh":
+            return {
+                "timestamp": utc_timestamp(),
+                "device": device,
+                "source": "cache",
+                "snapshot": cached,
+            }
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "source": "scope",
+            "snapshot": self.build_setup_snapshot(device, delay, read_size, channels),
+        }
+
+    def snapshot_cached(self, device: str) -> dict[str, Any]:
+        device, cached = self.get_cached_snapshot(device)
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "found": cached is not None,
+            "snapshot": cached,
+        }
+
+    def snapshot_refresh(
+        self,
+        device: str,
+        delay: float,
+        read_size: int,
+        channels: list[int],
+    ) -> dict[str, Any]:
+        device = self.resolve_device(device)
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "source": "scope",
+            "snapshot": self.build_setup_snapshot(device, delay, read_size, channels),
+        }
+
     def mark_cache_stale(self, device: str, reason: str) -> None:
         cached = self.scope_setup_cache.get(device)
         if cached is not None:
@@ -434,109 +595,7 @@ def build_setup_snapshot(
     read_size: int,
     channels: list[int],
 ) -> dict[str, Any]:
-    scope = build_scope(device, delay, read_size)
-    device = scope.device
-    snapshot: dict[str, Any] = {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "identity": scope_query(scope, "*IDN?", delay, read_size),
-        "channels": {},
-        "timebase": {},
-        "trigger": {},
-        "acquire": {},
-        "waveform": {},
-        "session": {},
-        "cache": {
-            "state": "fresh",
-            "reason": "snapshot_refresh",
-            "timestamp": utc_timestamp(),
-        },
-    }
-
-    visible_channels: list[int] = []
-    for channel in channels:
-        channel_settings: dict[str, str] = {}
-        for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
-            channel_settings[setting_name] = query_protocol_value(
-                scope,
-                command_key,
-                {"channel": channel},
-                delay,
-                read_size,
-            )
-        if channel_settings.get("display") == "ON":
-            visible_channels.append(channel)
-        snapshot["channels"][str(channel)] = channel_settings
-
-    for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
-        snapshot["timebase"][setting_name] = query_protocol_value(
-            scope,
-            command_key,
-            delay=delay,
-            read_size=read_size,
-        )
-
-    trigger_mode = query_protocol_value(scope, "trigger_mode_get", delay=delay, read_size=read_size)
-    snapshot["trigger"]["mode"] = trigger_mode
-    snapshot["trigger"]["source"] = query_protocol_value(
-        scope,
-        "trigger_source_get",
-        {"mode": trigger_mode},
-        delay,
-        read_size,
-    )
-    snapshot["trigger"]["level"] = query_protocol_value(
-        scope,
-        "trigger_level_get",
-        {"mode": trigger_mode},
-        delay,
-        read_size,
-    )
-    snapshot["trigger"]["sweep"] = query_protocol_value(
-        scope,
-        "trigger_sweep_get",
-        {"mode": trigger_mode},
-        delay,
-        read_size,
-    )
-    snapshot["trigger"]["holdoff"] = query_protocol_value(
-        scope,
-        "trigger_holdoff_get",
-        delay=delay,
-        read_size=read_size,
-    )
-
-    for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
-        snapshot["acquire"][setting_name] = query_protocol_value(
-            scope,
-            command_key,
-            delay=delay,
-            read_size=read_size,
-        )
-    snapshot["acquire"]["sampling_rate"] = {}
-    for channel in visible_channels:
-        snapshot["acquire"]["sampling_rate"][str(channel)] = query_protocol_value(
-            scope,
-            "acquire_sampling_rate_get",
-            {"channel": channel},
-            delay,
-            read_size,
-        )
-
-    snapshot["waveform"]["points_mode"] = query_protocol_value(
-        scope,
-        "waveform_points_mode_get",
-        delay=delay,
-        read_size=read_size,
-    )
-    snapshot["session"]["trigger_status"] = query_protocol_value(
-        scope,
-        "trigger_status",
-        delay=delay,
-        read_size=read_size,
-    )
-    _SCOPE_SETUP_CACHE[device] = snapshot
-    return snapshot
+    return _MANAGED_SCOPE.build_setup_snapshot(device, delay, read_size, channels)
 
 
 def normalize_channels(channels: list[int] | None) -> list[int]:
@@ -626,21 +685,7 @@ def rigol_ds1102e_snapshot_get(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
     """Return the cached setup snapshot, refreshing from the scope if missing or stale."""
-    device = resolve_device(device)
-    cached = _SCOPE_SETUP_CACHE.get(device)
-    if cached is not None and cached.get("cache", {}).get("state") == "fresh":
-        return {
-            "timestamp": utc_timestamp(),
-            "device": device,
-            "source": "cache",
-            "snapshot": cached,
-        }
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "source": "scope",
-        "snapshot": build_setup_snapshot(device, delay, read_size, normalize_channels(channels)),
-    }
+    return _MANAGED_SCOPE.snapshot_get(device, delay, read_size, normalize_channels(channels))
 
 
 @mcp.tool()
@@ -648,14 +693,7 @@ def rigol_ds1102e_snapshot_cached(
     device: str = "/dev/usbtmc0",
 ) -> dict[str, Any]:
     """Return the last stored setup snapshot without querying the scope."""
-    device = resolve_device(device)
-    cached = _SCOPE_SETUP_CACHE.get(device)
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "found": cached is not None,
-        "snapshot": cached,
-    }
+    return _MANAGED_SCOPE.snapshot_cached(device)
 
 
 @mcp.tool()
@@ -666,13 +704,7 @@ def rigol_ds1102e_snapshot_refresh(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
     """Read a full setup snapshot from the scope and store it in the server cache."""
-    device = resolve_device(device)
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "source": "scope",
-        "snapshot": build_setup_snapshot(device, delay, read_size, normalize_channels(channels)),
-    }
+    return _MANAGED_SCOPE.snapshot_refresh(device, delay, read_size, normalize_channels(channels))
 
 
 @mcp.tool()
