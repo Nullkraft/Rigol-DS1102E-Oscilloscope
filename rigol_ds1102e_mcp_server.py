@@ -39,10 +39,6 @@ DEFAULT_DEVICE = "/dev/usbtmc0"
 RIGOL_VENDOR_ID = "1ab1"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
-_SCOPE_SETUP_CACHE: dict[str, dict[str, Any]] = {}
-_ACTIVE_DEVICE: str | None = None
-_ACTIVE_DEVICE_FD: int | None = None
-_DEVICE_FD_LOCK = threading.Lock()
 
 SNAPSHOT_CHANNEL_KEYS = (
     ("display", "channel_display_get"),
@@ -144,81 +140,131 @@ def list_candidate_devices() -> list[str]:
     return sorted(set(devices))
 
 
+class ManagedScopeState:
+    def __init__(self) -> None:
+        self.scope_setup_cache: dict[str, dict[str, Any]] = {}
+        self.active_device: str | None = None
+        self.active_device_fd: int | None = None
+        self.device_fd_lock = threading.Lock()
+
+    def resolve_default_device(self) -> str:
+        for record in list_candidate_device_records():
+            if record.get("idVendor", "").lower() == RIGOL_VENDOR_ID:
+                return str(record["device"])
+        return DEFAULT_DEVICE
+
+    def resolve_device(self, device: str) -> str:
+        if device == DEFAULT_DEVICE:
+            return self.resolve_default_device()
+        return device
+
+    def build_scope(self, device: str, delay: float, read_size: int) -> RigolDS1102E:
+        device = self.resolve_device(device)
+        return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
+
+    def active_device_fd_for_scope(self, scope: RigolDS1102E) -> int:
+        if self.active_device_fd is not None and self.active_device != scope.device:
+            os.close(self.active_device_fd)
+            self.active_device_fd = None
+            self.active_device = None
+        if self.active_device_fd is None:
+            self.active_device_fd = scope._open_device()
+            self.active_device = scope.device
+        return self.active_device_fd
+
+    def close_active_device_fd(self) -> None:
+        if self.active_device_fd is not None:
+            os.close(self.active_device_fd)
+        self.active_device_fd = None
+        self.active_device = None
+
+    def rebuild_scope(self, scope: RigolDS1102E) -> RigolDS1102E:
+        if scope.device == DEFAULT_DEVICE:
+            return self.build_scope(DEFAULT_DEVICE, scope.query_delay, scope.read_size)
+        return scope
+
+    def scope_write(self, scope: RigolDS1102E, scpi: str) -> None:
+        payload = scope._normalize_command(scpi)
+        with self.device_fd_lock:
+            try:
+                os.write(self.active_device_fd_for_scope(scope), payload)
+            except OSError:
+                self.close_active_device_fd()
+                scope = self.rebuild_scope(scope)
+                os.write(self.active_device_fd_for_scope(scope), payload)
+
+    def scope_query_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
+        payload = scope._normalize_command(scpi)
+        with self.device_fd_lock:
+            try:
+                fd = self.active_device_fd_for_scope(scope)
+                os.write(fd, payload)
+                time.sleep(delay)
+                return os.read(fd, read_size)
+            except OSError:
+                self.close_active_device_fd()
+                scope = self.rebuild_scope(scope)
+                fd = self.active_device_fd_for_scope(scope)
+                os.write(fd, payload)
+                time.sleep(delay)
+                return os.read(fd, read_size)
+
+    def scope_query(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
+        response = self.scope_query_bytes(scope, scpi, delay, read_size)
+        return response.decode("ascii", "replace").replace("\x00", "").strip()
+
+    def query_raw_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
+        return self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
+
+    def mark_cache_stale(self, device: str, reason: str) -> None:
+        cached = self.scope_setup_cache.get(device)
+        if cached is not None:
+            cached["cache"] = {
+                "state": "stale",
+                "reason": reason,
+                "timestamp": utc_timestamp(),
+            }
+
+
+_MANAGED_SCOPE = ManagedScopeState()
+# Temporary compatibility alias while unchanged handlers still read the cache directly.
+_SCOPE_SETUP_CACHE = _MANAGED_SCOPE.scope_setup_cache
+
+
 def resolve_default_device() -> str:
-    for record in list_candidate_device_records():
-        if record.get("idVendor", "").lower() == RIGOL_VENDOR_ID:
-            return str(record["device"])
-    return DEFAULT_DEVICE
+    return _MANAGED_SCOPE.resolve_default_device()
 
 
 def resolve_device(device: str) -> str:
-    if device == DEFAULT_DEVICE:
-        return resolve_default_device()
-    return device
+    return _MANAGED_SCOPE.resolve_device(device)
 
 
 def build_scope(device: str, delay: float, read_size: int) -> RigolDS1102E:
-    device = resolve_device(device)
-    return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
+    return _MANAGED_SCOPE.build_scope(device, delay, read_size)
 
 
 def active_device_fd(scope: RigolDS1102E) -> int:
-    global _ACTIVE_DEVICE, _ACTIVE_DEVICE_FD
-    if _ACTIVE_DEVICE_FD is not None and _ACTIVE_DEVICE != scope.device:
-        os.close(_ACTIVE_DEVICE_FD)
-        _ACTIVE_DEVICE_FD = None
-        _ACTIVE_DEVICE = None
-    if _ACTIVE_DEVICE_FD is None:
-        _ACTIVE_DEVICE_FD = scope._open_device()
-        _ACTIVE_DEVICE = scope.device
-    return _ACTIVE_DEVICE_FD
+    return _MANAGED_SCOPE.active_device_fd_for_scope(scope)
 
 
 def close_active_device_fd() -> None:
-    global _ACTIVE_DEVICE, _ACTIVE_DEVICE_FD
-    if _ACTIVE_DEVICE_FD is not None:
-        os.close(_ACTIVE_DEVICE_FD)
-    _ACTIVE_DEVICE_FD = None
-    _ACTIVE_DEVICE = None
+    _MANAGED_SCOPE.close_active_device_fd()
 
 
 def rebuild_scope(scope: RigolDS1102E) -> RigolDS1102E:
-    if scope.device == DEFAULT_DEVICE:
-        return build_scope(DEFAULT_DEVICE, scope.query_delay, scope.read_size)
-    return scope
+    return _MANAGED_SCOPE.rebuild_scope(scope)
 
 
 def scope_write(scope: RigolDS1102E, scpi: str) -> None:
-    payload = scope._normalize_command(scpi)
-    with _DEVICE_FD_LOCK:
-        try:
-            os.write(active_device_fd(scope), payload)
-        except OSError:
-            close_active_device_fd()
-            scope = rebuild_scope(scope)
-            os.write(active_device_fd(scope), payload)
+    _MANAGED_SCOPE.scope_write(scope, scpi)
 
 
 def scope_query(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
-    response = scope_query_bytes(scope, scpi, delay, read_size)
-    return response.decode("ascii", "replace").replace("\x00", "").strip()
+    return _MANAGED_SCOPE.scope_query(scope, scpi, delay, read_size)
 
 
 def scope_query_bytes(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
-    payload = scope._normalize_command(scpi)
-    with _DEVICE_FD_LOCK:
-        try:
-            fd = active_device_fd(scope)
-            os.write(fd, payload)
-            time.sleep(delay)
-            return os.read(fd, read_size)
-        except OSError:
-            close_active_device_fd()
-            scope = rebuild_scope(scope)
-            fd = active_device_fd(scope)
-            os.write(fd, payload)
-            time.sleep(delay)
-            return os.read(fd, read_size)
+    return _MANAGED_SCOPE.scope_query_bytes(scope, scpi, delay, read_size)
 
 
 def is_supported_protocol_command(key: str) -> bool:
@@ -257,7 +303,7 @@ def query_raw_bytes(
     delay: float,
     read_size: int,
 ) -> bytes:
-    return scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
+    return _MANAGED_SCOPE.query_raw_bytes(scope, scpi, delay, read_size)
 
 
 def query_waveform_bytes(
@@ -350,13 +396,7 @@ def prepare_for_new_sweep(scope: RigolDS1102E, trigger_mode: str = "EDGE", sweep
 
 
 def mark_cache_stale(device: str, reason: str) -> None:
-    cached = _SCOPE_SETUP_CACHE.get(device)
-    if cached is not None:
-        cached["cache"] = {
-            "state": "stale",
-            "reason": reason,
-            "timestamp": utc_timestamp(),
-        }
+    _MANAGED_SCOPE.mark_cache_stale(device, reason)
 
 
 def build_setup_snapshot(
