@@ -19,6 +19,7 @@ markdown-it-py==4.0.0
 mcp==1.27.0
 mdurl==0.1.2
 numpy==2.4.5
+platformdirs==4.10.0
 pycparser==3.0
 pydantic==2.13.2
 pydantic-settings==2.13.1
