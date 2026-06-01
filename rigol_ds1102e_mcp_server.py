@@ -406,6 +406,108 @@ class ManagedScopeState:
             "snapshot": self.build_setup_snapshot(device, delay, read_size, channels),
         }
 
+    def apply_profile(
+        self,
+        profile: dict[str, Any],
+        device: str,
+        delay: float,
+        read_size: int,
+        refresh_after: bool,
+    ) -> dict[str, Any]:
+        if "snapshot" in profile and isinstance(profile["snapshot"], dict):
+            profile = profile["snapshot"]
+        scope = self.build_scope(device, delay, read_size)
+        device = scope.device
+        writes: list[dict[str, Any]] = []
+
+        for channel_key, settings in profile.get("channels", {}).items():
+            channel = int(channel_key)
+            if channel not in (1, 2):
+                raise ValueError(f"channel must be 1 or 2, got {channel}")
+            for setting_name, value in settings.items():
+                mapped = PROFILE_CHANNEL_SETTERS.get(setting_name)
+                if mapped is None:
+                    raise ValueError(f"unsupported channel setting: {setting_name}")
+                command_key, param_name = mapped
+                params = {"channel": channel, param_name: value}
+                scpi = write_protocol_value(scope, command_key, params)
+                writes.append({"key": command_key, "params": params, "scpi": scpi})
+
+        for setting_name, value in profile.get("timebase", {}).items():
+            mapped = PROFILE_TIMEBASE_SETTERS.get(setting_name)
+            if mapped is None:
+                raise ValueError(f"unsupported timebase setting: {setting_name}")
+            command_key, param_name = mapped
+            params = {param_name: value}
+            scpi = write_protocol_value(scope, command_key, params)
+            writes.append({"key": command_key, "params": params, "scpi": scpi})
+
+        trigger_settings = profile.get("trigger", {})
+        trigger_mode = trigger_settings.get("mode")
+        if trigger_mode is None:
+            _, cached = self.get_cached_snapshot(device)
+            trigger_mode = (cached or {}).get("trigger", {}).get("mode", "EDGE")
+        if "mode" in trigger_settings:
+            params = {"mode": trigger_settings["mode"]}
+            scpi = write_protocol_value(scope, "trigger_mode_set", params)
+            writes.append({"key": "trigger_mode_set", "params": params, "scpi": scpi})
+            trigger_mode = trigger_settings["mode"]
+        for setting_name, command_key in (
+            ("source", "trigger_source_set"),
+            ("level", "trigger_level_set"),
+            ("sweep", "trigger_sweep_set"),
+        ):
+            if setting_name in trigger_settings:
+                params = {"mode": trigger_mode, setting_name: trigger_settings[setting_name]}
+                scpi = write_protocol_value(scope, command_key, params)
+                writes.append({"key": command_key, "params": params, "scpi": scpi})
+        if "holdoff" in trigger_settings:
+            params = {"holdoff": trigger_settings["holdoff"]}
+            scpi = write_protocol_value(scope, "trigger_holdoff_set", params)
+            writes.append({"key": "trigger_holdoff_set", "params": params, "scpi": scpi})
+
+        for setting_name, value in profile.get("acquire", {}).items():
+            mapped = PROFILE_ACQUIRE_SETTERS.get(setting_name)
+            if mapped is None:
+                if setting_name == "sampling_rate":
+                    continue
+                raise ValueError(f"unsupported acquire setting: {setting_name}")
+            command_key, param_name = mapped
+            params = {param_name: value}
+            scpi = write_protocol_value(scope, command_key, params)
+            writes.append({"key": command_key, "params": params, "scpi": scpi})
+
+        for setting_name, value in profile.get("waveform", {}).items():
+            command_key = PROFILE_WAVEFORM_SETTERS.get(setting_name)
+            if command_key is None:
+                raise ValueError(f"unsupported waveform setting: {setting_name}")
+            params = {setting_name: value}
+            scpi = write_protocol_value(scope, command_key, params)
+            writes.append({"key": command_key, "params": params, "scpi": scpi})
+
+        session_settings = profile.get("session", {})
+        for setting_name, command_key in (("run", "run"), ("stop", "stop"), ("force_trigger", "force_trigger")):
+            if session_settings.get(setting_name):
+                scpi = write_protocol_value(scope, command_key)
+                writes.append({"key": command_key, "params": {}, "scpi": scpi})
+
+        if refresh_after:
+            snapshot = self.build_setup_snapshot(device, delay, read_size, [1, 2])
+            cache_state = "fresh"
+        else:
+            self.mark_cache_stale(device, "profile applied without refresh")
+            _, snapshot = self.get_cached_snapshot(device)
+            cache_state = "stale"
+
+        return {
+            "timestamp": utc_timestamp(),
+            "device": device,
+            "status": "ok",
+            "writes": writes,
+            "cache_state": cache_state,
+            "snapshot": snapshot,
+        }
+
     def mark_cache_stale(self, device: str, reason: str) -> None:
         cached = self.scope_setup_cache.get(device)
         if cached is not None:
@@ -417,8 +519,6 @@ class ManagedScopeState:
 
 
 _MANAGED_SCOPE = ManagedScopeState()
-# Temporary compatibility alias while unchanged handlers still read the cache directly.
-_SCOPE_SETUP_CACHE = _MANAGED_SCOPE.scope_setup_cache
 
 
 def resolve_default_device() -> str:
@@ -589,15 +689,6 @@ def mark_cache_stale(device: str, reason: str) -> None:
     _MANAGED_SCOPE.mark_cache_stale(device, reason)
 
 
-def build_setup_snapshot(
-    device: str,
-    delay: float,
-    read_size: int,
-    channels: list[int],
-) -> dict[str, Any]:
-    return _MANAGED_SCOPE.build_setup_snapshot(device, delay, read_size, channels)
-
-
 def normalize_channels(channels: list[int] | None) -> list[int]:
     selected = channels or [1, 2]
     normalized = []
@@ -716,99 +807,7 @@ def rigol_ds1102e_apply_profile(
     refresh_after: bool = True,
 ) -> dict[str, Any]:
     """Apply multiple setup changes in one request and refresh the setup cache."""
-    if "snapshot" in profile and isinstance(profile["snapshot"], dict):
-        profile = profile["snapshot"]
-    scope = build_scope(device, delay, read_size)
-    device = scope.device
-    writes: list[dict[str, Any]] = []
-
-    for channel_key, settings in profile.get("channels", {}).items():
-        channel = int(channel_key)
-        if channel not in (1, 2):
-            raise ValueError(f"channel must be 1 or 2, got {channel}")
-        for setting_name, value in settings.items():
-            mapped = PROFILE_CHANNEL_SETTERS.get(setting_name)
-            if mapped is None:
-                raise ValueError(f"unsupported channel setting: {setting_name}")
-            command_key, param_name = mapped
-            params = {"channel": channel, param_name: value}
-            scpi = write_protocol_value(scope, command_key, params)
-            writes.append({"key": command_key, "params": params, "scpi": scpi})
-
-    for setting_name, value in profile.get("timebase", {}).items():
-        mapped = PROFILE_TIMEBASE_SETTERS.get(setting_name)
-        if mapped is None:
-            raise ValueError(f"unsupported timebase setting: {setting_name}")
-        command_key, param_name = mapped
-        params = {param_name: value}
-        scpi = write_protocol_value(scope, command_key, params)
-        writes.append({"key": command_key, "params": params, "scpi": scpi})
-
-    trigger_settings = profile.get("trigger", {})
-    trigger_mode = trigger_settings.get("mode")
-    if trigger_mode is None:
-        cached = _SCOPE_SETUP_CACHE.get(device)
-        trigger_mode = (cached or {}).get("trigger", {}).get("mode", "EDGE")
-    if "mode" in trigger_settings:
-        params = {"mode": trigger_settings["mode"]}
-        scpi = write_protocol_value(scope, "trigger_mode_set", params)
-        writes.append({"key": "trigger_mode_set", "params": params, "scpi": scpi})
-        trigger_mode = trigger_settings["mode"]
-    for setting_name, command_key in (
-        ("source", "trigger_source_set"),
-        ("level", "trigger_level_set"),
-        ("sweep", "trigger_sweep_set"),
-    ):
-        if setting_name in trigger_settings:
-            params = {"mode": trigger_mode, setting_name: trigger_settings[setting_name]}
-            scpi = write_protocol_value(scope, command_key, params)
-            writes.append({"key": command_key, "params": params, "scpi": scpi})
-    if "holdoff" in trigger_settings:
-        params = {"holdoff": trigger_settings["holdoff"]}
-        scpi = write_protocol_value(scope, "trigger_holdoff_set", params)
-        writes.append({"key": "trigger_holdoff_set", "params": params, "scpi": scpi})
-
-    for setting_name, value in profile.get("acquire", {}).items():
-        mapped = PROFILE_ACQUIRE_SETTERS.get(setting_name)
-        if mapped is None:
-            if setting_name == "sampling_rate":
-                continue
-            raise ValueError(f"unsupported acquire setting: {setting_name}")
-        command_key, param_name = mapped
-        params = {param_name: value}
-        scpi = write_protocol_value(scope, command_key, params)
-        writes.append({"key": command_key, "params": params, "scpi": scpi})
-
-    for setting_name, value in profile.get("waveform", {}).items():
-        command_key = PROFILE_WAVEFORM_SETTERS.get(setting_name)
-        if command_key is None:
-            raise ValueError(f"unsupported waveform setting: {setting_name}")
-        params = {setting_name: value}
-        scpi = write_protocol_value(scope, command_key, params)
-        writes.append({"key": command_key, "params": params, "scpi": scpi})
-
-    session_settings = profile.get("session", {})
-    for setting_name, command_key in (("run", "run"), ("stop", "stop"), ("force_trigger", "force_trigger")):
-        if session_settings.get(setting_name):
-            scpi = write_protocol_value(scope, command_key)
-            writes.append({"key": command_key, "params": {}, "scpi": scpi})
-
-    if refresh_after:
-        snapshot = build_setup_snapshot(device, delay, read_size, [1, 2])
-        cache_state = "fresh"
-    else:
-        mark_cache_stale(device, "profile applied without refresh")
-        snapshot = _SCOPE_SETUP_CACHE.get(device)
-        cache_state = "stale"
-
-    return {
-        "timestamp": utc_timestamp(),
-        "device": device,
-        "status": "ok",
-        "writes": writes,
-        "cache_state": cache_state,
-        "snapshot": snapshot,
-    }
+    return _MANAGED_SCOPE.apply_profile(profile, device, delay, read_size, refresh_after)
 
 
 @mcp.tool()
