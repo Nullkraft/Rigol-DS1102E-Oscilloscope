@@ -926,13 +926,6 @@ _MANAGED_SCOPE = ManagedScopeState()
 def resolve_default_device() -> str:
     return _MANAGED_SCOPE.resolve_default_device()
 
-def scope_write(scope: RigolDS1102E, scpi: str) -> None:
-    _MANAGED_SCOPE.scope_write(scope, scpi)
-
-
-def scope_query(scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
-    return _MANAGED_SCOPE.scope_query(scope, scpi, delay, read_size)
-
 
 def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
