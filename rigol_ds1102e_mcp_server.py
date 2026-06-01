@@ -839,11 +839,6 @@ _MANAGED_SCOPE = ManagedScopeState()
 def resolve_default_device() -> str:
     return _MANAGED_SCOPE.resolve_default_device()
 
-
-def build_scope(device: str, delay: float, read_size: int) -> RigolDS1102E:
-    return _MANAGED_SCOPE.build_scope(device, delay, read_size)
-
-
 def scope_write(scope: RigolDS1102E, scpi: str) -> None:
     _MANAGED_SCOPE.scope_write(scope, scpi)
 
@@ -968,11 +963,6 @@ def capture_waveform_channels(
         captured_channels[str(channel)] = query_waveform_bytes(scope, scpi, delay, read_size)
 
     return writes, captured_channels
-
-
-def mark_cache_stale(device: str, reason: str) -> None:
-    _MANAGED_SCOPE.mark_cache_stale(device, reason)
-
 
 def normalize_channels(channels: list[int] | None) -> list[int]:
     selected = channels or [1, 2]
