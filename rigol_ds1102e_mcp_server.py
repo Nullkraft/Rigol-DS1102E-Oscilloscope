@@ -35,6 +35,7 @@ DEFAULT_GLOB_PATTERNS = (
 )
 DEFAULT_DEVICE = "/dev/usbtmc0"
 RIGOL_VENDOR_ID = "1ab1"
+RIGOL_DS1102E_IDN_PREFIX = "RIGOL TECHNOLOGIES,DS1102E"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
 
@@ -146,15 +147,18 @@ class ManagedScopeState:
         self.device_fd_lock = threading.Lock()
 
     def resolve_default_device(self) -> str:
-        for record in list_candidate_device_records():
-            if record.get("idVendor", "").lower() == RIGOL_VENDOR_ID:
-                return str(record["device"])
-        return DEFAULT_DEVICE
+        for device in list_candidate_devices():
+            scope = RigolDS1102E(device=device, query_delay=0.2, read_size=4096)
+            try:
+                identity = scope.identify()
+            except Exception:
+                continue
+            if identity.startswith(RIGOL_DS1102E_IDN_PREFIX):
+                return device
+        raise RuntimeError("Could not find a DS1102E by probing USBTMC devices with *IDN?.")
 
     def resolve_device(self, device: str) -> str:
-        if device == DEFAULT_DEVICE:
-            return self.resolve_default_device()
-        return device
+        return self.resolve_default_device()
 
     def build_scope(self, device: str, delay: float, read_size: int) -> RigolDS1102E:
         device = self.resolve_device(device)
@@ -177,9 +181,7 @@ class ManagedScopeState:
         self.active_device = None
 
     def rebuild_scope(self, scope: RigolDS1102E) -> RigolDS1102E:
-        if scope.device == DEFAULT_DEVICE:
-            return self.build_scope(DEFAULT_DEVICE, scope.query_delay, scope.read_size)
-        return scope
+        return self.build_scope(DEFAULT_DEVICE, scope.query_delay, scope.read_size)
 
     def scope_write(self, scope: RigolDS1102E, scpi: str) -> None:
         payload = scope._normalize_command(scpi)
@@ -968,11 +970,19 @@ def normalize_channels(channels: list[int] | None) -> list[int]:
 @mcp.tool()
 def list_ports() -> dict[str, Any]:
     """List likely USBTMC device nodes for the Rigol DS1102E."""
+    resolved_default_device: str | None
+    resolved_default_error: str | None = None
+    try:
+        resolved_default_device = resolve_default_device()
+    except RuntimeError as exc:
+        resolved_default_device = None
+        resolved_default_error = str(exc)
     return {
         "timestamp": utc_timestamp(),
         "devices": list_candidate_devices(),
         "device_records": list_candidate_device_records(),
-        "resolved_default_device": resolve_default_device(),
+        "resolved_default_device": resolved_default_device,
+        "resolved_default_error": resolved_default_error,
         "patterns": list(DEFAULT_GLOB_PATTERNS),
     }
 
