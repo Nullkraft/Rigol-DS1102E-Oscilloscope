@@ -211,6 +211,31 @@ class ManagedScopeState:
         response = self.scope_query_bytes(scope, scpi, delay, read_size)
         return response.decode("ascii", "replace").replace("\x00", "").strip()
 
+    def protocol_query(
+        self,
+        scope: RigolDS1102E,
+        key: str,
+        params: dict[str, Any] | None = None,
+        delay: float = 0.2,
+        read_size: int = 4096,
+    ) -> str:
+        scpi = render_command(key, **(params or {}))
+        if is_excluded_command(scpi):
+            raise ValueError(f"protocol command is excluded: {key}")
+        return self.scope_query(scope, scpi, delay, read_size)
+
+    def protocol_write(
+        self,
+        scope: RigolDS1102E,
+        key: str,
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        scpi = render_command(key, **(params or {}))
+        if is_excluded_command(scpi):
+            raise ValueError(f"protocol command is excluded: {key}")
+        self.scope_write(scope, scpi)
+        return scpi
+
     def query_raw_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
         return self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
 
@@ -277,7 +302,7 @@ class ManagedScopeState:
         for channel in channels:
             channel_settings: dict[str, str] = {}
             for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
-                channel_settings[setting_name] = query_protocol_value(
+                channel_settings[setting_name] = self.protocol_query(
                     scope,
                     command_key,
                     {"channel": channel},
@@ -289,37 +314,37 @@ class ManagedScopeState:
             snapshot["channels"][str(channel)] = channel_settings
 
         for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
-            snapshot["timebase"][setting_name] = query_protocol_value(
+            snapshot["timebase"][setting_name] = self.protocol_query(
                 scope,
                 command_key,
                 delay=delay,
                 read_size=read_size,
             )
 
-        trigger_mode = query_protocol_value(scope, "trigger_mode_get", delay=delay, read_size=read_size)
+        trigger_mode = self.protocol_query(scope, "trigger_mode_get", delay=delay, read_size=read_size)
         snapshot["trigger"]["mode"] = trigger_mode
-        snapshot["trigger"]["source"] = query_protocol_value(
+        snapshot["trigger"]["source"] = self.protocol_query(
             scope,
             "trigger_source_get",
             {"mode": trigger_mode},
             delay,
             read_size,
         )
-        snapshot["trigger"]["level"] = query_protocol_value(
+        snapshot["trigger"]["level"] = self.protocol_query(
             scope,
             "trigger_level_get",
             {"mode": trigger_mode},
             delay,
             read_size,
         )
-        snapshot["trigger"]["sweep"] = query_protocol_value(
+        snapshot["trigger"]["sweep"] = self.protocol_query(
             scope,
             "trigger_sweep_get",
             {"mode": trigger_mode},
             delay,
             read_size,
         )
-        snapshot["trigger"]["holdoff"] = query_protocol_value(
+        snapshot["trigger"]["holdoff"] = self.protocol_query(
             scope,
             "trigger_holdoff_get",
             delay=delay,
@@ -327,7 +352,7 @@ class ManagedScopeState:
         )
 
         for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
-            snapshot["acquire"][setting_name] = query_protocol_value(
+            snapshot["acquire"][setting_name] = self.protocol_query(
                 scope,
                 command_key,
                 delay=delay,
@@ -335,7 +360,7 @@ class ManagedScopeState:
             )
         snapshot["acquire"]["sampling_rate"] = {}
         for channel in visible_channels:
-            snapshot["acquire"]["sampling_rate"][str(channel)] = query_protocol_value(
+            snapshot["acquire"]["sampling_rate"][str(channel)] = self.protocol_query(
                 scope,
                 "acquire_sampling_rate_get",
                 {"channel": channel},
@@ -343,13 +368,13 @@ class ManagedScopeState:
                 read_size,
             )
 
-        snapshot["waveform"]["points_mode"] = query_protocol_value(
+        snapshot["waveform"]["points_mode"] = self.protocol_query(
             scope,
             "waveform_points_mode_get",
             delay=delay,
             read_size=read_size,
         )
-        snapshot["session"]["trigger_status"] = query_protocol_value(
+        snapshot["session"]["trigger_status"] = self.protocol_query(
             scope,
             "trigger_status",
             delay=delay,
@@ -428,7 +453,7 @@ class ManagedScopeState:
                     raise ValueError(f"unsupported channel setting: {setting_name}")
                 command_key, param_name = mapped
                 params = {"channel": channel, param_name: value}
-                scpi = write_protocol_value(scope, command_key, params)
+                scpi = self.protocol_write(scope, command_key, params)
                 writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("timebase", {}).items():
@@ -437,7 +462,7 @@ class ManagedScopeState:
                 raise ValueError(f"unsupported timebase setting: {setting_name}")
             command_key, param_name = mapped
             params = {param_name: value}
-            scpi = write_protocol_value(scope, command_key, params)
+            scpi = self.protocol_write(scope, command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         trigger_settings = profile.get("trigger", {})
@@ -447,7 +472,7 @@ class ManagedScopeState:
             trigger_mode = (cached or {}).get("trigger", {}).get("mode", "EDGE")
         if "mode" in trigger_settings:
             params = {"mode": trigger_settings["mode"]}
-            scpi = write_protocol_value(scope, "trigger_mode_set", params)
+            scpi = self.protocol_write(scope, "trigger_mode_set", params)
             writes.append({"key": "trigger_mode_set", "params": params, "scpi": scpi})
             trigger_mode = trigger_settings["mode"]
         for setting_name, command_key in (
@@ -457,11 +482,11 @@ class ManagedScopeState:
         ):
             if setting_name in trigger_settings:
                 params = {"mode": trigger_mode, setting_name: trigger_settings[setting_name]}
-                scpi = write_protocol_value(scope, command_key, params)
+                scpi = self.protocol_write(scope, command_key, params)
                 writes.append({"key": command_key, "params": params, "scpi": scpi})
         if "holdoff" in trigger_settings:
             params = {"holdoff": trigger_settings["holdoff"]}
-            scpi = write_protocol_value(scope, "trigger_holdoff_set", params)
+            scpi = self.protocol_write(scope, "trigger_holdoff_set", params)
             writes.append({"key": "trigger_holdoff_set", "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("acquire", {}).items():
@@ -472,7 +497,7 @@ class ManagedScopeState:
                 raise ValueError(f"unsupported acquire setting: {setting_name}")
             command_key, param_name = mapped
             params = {param_name: value}
-            scpi = write_protocol_value(scope, command_key, params)
+            scpi = self.protocol_write(scope, command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("waveform", {}).items():
@@ -480,13 +505,13 @@ class ManagedScopeState:
             if command_key is None:
                 raise ValueError(f"unsupported waveform setting: {setting_name}")
             params = {setting_name: value}
-            scpi = write_protocol_value(scope, command_key, params)
+            scpi = self.protocol_write(scope, command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         session_settings = profile.get("session", {})
         for setting_name, command_key in (("run", "run"), ("stop", "stop"), ("force_trigger", "force_trigger")):
             if session_settings.get(setting_name):
-                scpi = write_protocol_value(scope, command_key)
+                scpi = self.protocol_write(scope, command_key)
                 writes.append({"key": command_key, "params": {}, "scpi": scpi})
 
         if refresh_after:
@@ -523,7 +548,7 @@ class ManagedScopeState:
 
         for channel in channels:
             params = {"channel": channel, "state": "ON"}
-            scpi = write_protocol_value(scope, "channel_display_set", params)
+            scpi = self.protocol_write(scope, "channel_display_set", params)
             writes.append({"key": "channel_display_set", "params": params, "scpi": scpi})
 
         for key, params in (
@@ -531,11 +556,11 @@ class ManagedScopeState:
             ("trigger_sweep_set", {"mode": trigger_mode, "sweep": sweep}),
             ("waveform_points_mode_set", {"points_mode": points_mode}),
         ):
-            scpi = write_protocol_value(scope, key, params)
+            scpi = self.protocol_write(scope, key, params)
             writes.append({"key": key, "params": params, "scpi": scpi})
 
         if run:
-            scpi = write_protocol_value(scope, "run")
+            scpi = self.protocol_write(scope, "run")
             writes.append({"key": "run", "params": {}, "scpi": scpi})
 
         self.mark_cache_stale(device, "scope setup applied")
@@ -701,11 +726,11 @@ class ManagedScopeState:
         writes: list[dict[str, Any]] = []
         current_time_scale = time_scale
         if current_time_scale is None:
-            response = query_protocol_value(scope, "timebase_scale_get", delay=delay, read_size=read_size)
+            response = self.protocol_query(scope, "timebase_scale_get", delay=delay, read_size=read_size)
             current_time_scale = float(response)
         if time_scale is not None:
             params = {"scale": time_scale}
-            scpi = write_protocol_value(scope, "timebase_scale_set", params)
+            scpi = self.protocol_write(scope, "timebase_scale_set", params)
             writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
 
         capture_writes, raw_channels = capture_waveform_channels(
@@ -851,32 +876,6 @@ def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
     return not is_excluded_command(command.template)
 
-
-def query_protocol_value(
-    scope: RigolDS1102E,
-    key: str,
-    params: dict[str, Any] | None = None,
-    delay: float = 0.2,
-    read_size: int = 4096,
-) -> str:
-    scpi = render_command(key, **(params or {}))
-    if is_excluded_command(scpi):
-        raise ValueError(f"protocol command is excluded: {key}")
-    return scope_query(scope, scpi, delay, read_size)
-
-
-def write_protocol_value(
-    scope: RigolDS1102E,
-    key: str,
-    params: dict[str, Any] | None = None,
-) -> str:
-    scpi = render_command(key, **(params or {}))
-    if is_excluded_command(scpi):
-        raise ValueError(f"protocol command is excluded: {key}")
-    scope_write(scope, scpi)
-    return scpi
-
-
 def query_raw_bytes(
     scope: RigolDS1102E,
     scpi: str,
@@ -908,11 +907,11 @@ def query_waveform_bytes(
 def require_stopped_scope(scope: RigolDS1102E, delay: float, read_size: int, attempts: int = 20) -> str:
     status = ""
     for _ in range(attempts):
-        status = query_protocol_value(scope, "trigger_status", delay=delay, read_size=read_size).upper()
+        status = _MANAGED_SCOPE.protocol_query(scope, "trigger_status", delay=delay, read_size=read_size).upper()
         if status == "STOP":
             return status
         if status == "WAIT":
-            write_protocol_value(scope, "stop")
+            _MANAGED_SCOPE.protocol_write(scope, "stop")
     raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
 
 
@@ -949,12 +948,12 @@ def capture_waveform_channels(
     writes: list[dict[str, Any]] = []
 
     if freeze:
-        scpi = write_protocol_value(scope, "stop")
+        scpi = _MANAGED_SCOPE.protocol_write(scope, "stop")
         writes.append({"key": "stop", "params": {}, "scpi": scpi})
         require_stopped_scope(scope, delay, read_size)
 
     params = {"points_mode": points_mode}
-    scpi = write_protocol_value(scope, "waveform_points_mode_set", params)
+    scpi = _MANAGED_SCOPE.protocol_write(scope, "waveform_points_mode_set", params)
     writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
 
     captured_channels: dict[str, bytes] = {}
