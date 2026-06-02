@@ -942,7 +942,7 @@ def list_ports() -> dict[str, Any]:
 
 @mcp.tool()
 def rigol_ds1102e_identify(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
 ) -> dict[str, Any]:
@@ -953,7 +953,7 @@ def rigol_ds1102e_identify(
 @mcp.tool()
 def rigol_ds1102e_query(
     scpi: str,
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
 ) -> dict[str, Any]:
@@ -964,7 +964,7 @@ def rigol_ds1102e_query(
 @mcp.tool()
 def rigol_ds1102e_write(
     scpi: str,
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
 ) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
     return _MANAGED_SCOPE.write(scpi, device)
@@ -997,7 +997,7 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 
 @mcp.tool()
 def rigol_ds1102e_snapshot_get(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
     channels: list[int] | None = None,
@@ -1008,7 +1008,7 @@ def rigol_ds1102e_snapshot_get(
 
 @mcp.tool()
 def rigol_ds1102e_snapshot_cached(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
 ) -> dict[str, Any]:
     """Return the last stored setup snapshot without querying the scope."""
     return _MANAGED_SCOPE.snapshot_cached(device)
@@ -1016,7 +1016,7 @@ def rigol_ds1102e_snapshot_cached(
 
 @mcp.tool()
 def rigol_ds1102e_snapshot_refresh(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
     channels: list[int] | None = None,
@@ -1028,7 +1028,7 @@ def rigol_ds1102e_snapshot_refresh(
 @mcp.tool()
 def rigol_ds1102e_apply_profile(
     profile: dict[str, Any],
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
     refresh_after: bool = True,
@@ -1039,7 +1039,7 @@ def rigol_ds1102e_apply_profile(
 
 @mcp.tool()
 def rigol_ds1102e_scope_setup(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     channels: list[int] | None = None,
     trigger_mode: str = "EDGE",
     sweep: str = "SINGLE",
@@ -1063,7 +1063,7 @@ def rigol_ds1102e_scope_setup(
 
 @mcp.tool()
 def rigol_ds1102e_data_capture(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     channels: list[int] | None = None,
     freeze: bool = True,
     points_mode: str = "RAW",
@@ -1077,7 +1077,7 @@ def rigol_ds1102e_data_capture(
 
 @mcp.tool()
 def rigol_ds1102e_spi_sample_indexes(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     clock_channel: int = 1,
     data_channel: int = 2,
     freeze: bool = True,
@@ -1103,7 +1103,7 @@ def rigol_ds1102e_spi_sample_indexes(
 
 @mcp.tool()
 def rigol_ds1102e_spi_decode(
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     clock_channel: int = 1,
     data_channel: int = 2,
     freeze: bool = True,
@@ -1147,7 +1147,7 @@ def rigol_ds1102e_spi_decode(
 def rigol_ds1102e_protocol_command(
     key: str,
     params: dict[str, Any] | None = None,
-    device: str = "/dev/usbtmc0",
+    device: str = DEFAULT_DEVICE,
     delay: float = 0.2,
     read_size: int = 4096,
 ) -> dict[str, Any]:
