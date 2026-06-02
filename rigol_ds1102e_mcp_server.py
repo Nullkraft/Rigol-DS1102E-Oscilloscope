@@ -482,21 +482,29 @@ class ManagedScopeState:
             "cache_state": "stale",
         }
 
-    def spi_sample_indexes(self, clock_channel: int, data_channel: int, freeze: bool, points_mode: str, threshold: int, slope_threshold: int,) -> dict[str, Any]:
-        if clock_channel == data_channel:
-            raise ValueError("clock_channel and data_channel must be different")
+    def spi_sample_indexes(
+        self,
+        clock_scope_channel: int,
+        data_scope_channel: int,
+        freeze: bool,
+        points_mode: str,
+        threshold: int,
+        slope_threshold: int,
+    ) -> dict[str, Any]:
+        if clock_scope_channel == data_scope_channel:
+            raise ValueError("clock_scope_channel and data_scope_channel must be different")
 
         scope = self.current_scope()
         device = scope.device
         writes, raw_channels = self.capture_waveform_channels(
             scope,
-            [clock_channel, data_channel],
+            [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
         )
 
-        clock_samples = normalize_waveform_samples(raw_channels[str(clock_channel)])
-        data_samples = normalize_waveform_samples(raw_channels[str(data_channel)])
+        clock_samples = normalize_waveform_samples(raw_channels[str(clock_scope_channel)])
+        data_samples = normalize_waveform_samples(raw_channels[str(data_scope_channel)])
         sample_indexes = detect_rising_edge_sample_indexes(
             clock_samples,
             threshold=threshold,
@@ -508,8 +516,8 @@ class ManagedScopeState:
             "device": device,
             "status": "ok",
             "writes": writes,
-            "clock_channel": clock_channel,
-            "data_channel": data_channel,
+            "clock_scope_channel": clock_scope_channel,
+            "data_scope_channel": data_scope_channel,
             "threshold": threshold,
             "slope_threshold": slope_threshold,
             "sample_indexes": sample_indexes,
@@ -528,8 +536,8 @@ class ManagedScopeState:
 
     def spi_decode(
         self,
-        clock_channel: int,
-        data_channel: int,
+        clock_scope_channel: int,
+        data_scope_channel: int,
         freeze: bool,
         points_mode: str,
         threshold: int,
@@ -543,8 +551,8 @@ class ManagedScopeState:
         time_scale: float | None,
         time_scale_margin: float,
     ) -> dict[str, Any]:
-        if clock_channel == data_channel:
-            raise ValueError("clock_channel and data_channel must be different")
+        if clock_scope_channel == data_scope_channel:
+            raise ValueError("clock_scope_channel and data_scope_channel must be different")
         if not 1 <= threshold <= 20:
             raise ValueError("threshold must be between 1 and 20")
         if not 1 <= slope_threshold <= 20:
@@ -586,14 +594,14 @@ class ManagedScopeState:
 
         capture_writes, raw_channels = self.capture_waveform_channels(
             scope,
-            [clock_channel, data_channel],
+            [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
         )
         writes.extend(capture_writes)
 
-        clock_samples = normalize_waveform_samples(raw_channels[str(clock_channel)])
-        data_samples = normalize_waveform_samples(raw_channels[str(data_channel)])
+        clock_samples = normalize_waveform_samples(raw_channels[str(clock_scope_channel)])
+        data_samples = normalize_waveform_samples(raw_channels[str(data_scope_channel)])
         sample_indexes = detect_rising_edge_sample_indexes(
             clock_samples,
             threshold=threshold,
@@ -634,8 +642,8 @@ class ManagedScopeState:
             "device": device,
             "status": "ok",
             "writes": writes,
-            "clock_channel": clock_channel,
-            "data_channel": data_channel,
+            "clock_scope_channel": clock_scope_channel,
+            "data_scope_channel": data_scope_channel,
             "threshold": threshold,
             "slope_threshold": slope_threshold,
             "low_ratio": low_ratio,
@@ -754,6 +762,41 @@ def normalize_channels(channels: list[int] | None) -> list[int]:
     return normalized
 
 
+def normalize_scope_channel(channel: int, name: str) -> int:
+    value = int(channel)
+    if value not in (1, 2):
+        raise ValueError(f"{name} must be 1 or 2, got {value}")
+    return value
+
+
+def resolve_spi_sources(
+    chan_1: int | None,
+    chan_2: int | None,
+    clock_source: str | None,
+    data_source: str | None,
+) -> tuple[int, int, dict[str, Any]]:
+    capture_map = {
+        "chan_1": normalize_scope_channel(1 if chan_1 is None else chan_1, "chan_1"),
+        "chan_2": normalize_scope_channel(2 if chan_2 is None else chan_2, "chan_2"),
+    }
+    resolved_clock_source = "chan_1" if clock_source is None else str(clock_source)
+    resolved_data_source = "chan_2" if data_source is None else str(data_source)
+    if resolved_clock_source not in capture_map:
+        raise ValueError("clock_source must be 'chan_1' or 'chan_2'")
+    if resolved_data_source not in capture_map:
+        raise ValueError("data_source must be 'chan_1' or 'chan_2'")
+    resolved_clock = capture_map[resolved_clock_source]
+    resolved_data = capture_map[resolved_data_source]
+    if resolved_clock == resolved_data:
+        raise ValueError("clock_source and data_source must resolve to different scope channels")
+    return resolved_clock, resolved_data, {
+        "chan_1": capture_map["chan_1"],
+        "chan_2": capture_map["chan_2"],
+        "clock_source": resolved_clock_source,
+        "data_source": resolved_data_source,
+    }
+
+
 @mcp.tool()
 def list_ports() -> dict[str, Any]:
     """List likely USBTMC device nodes for the Rigol DS1102E."""
@@ -870,28 +913,40 @@ def rigol_ds1102e_data_capture(
 
 @mcp.tool()
 def rigol_ds1102e_spi_sample_indexes(
-    clock_channel: int = 1,
-    data_channel: int = 2,
+    chan_1: int | None = None,
+    chan_2: int | None = None,
+    clock_source: str | None = None,
+    data_source: str | None = None,
     freeze: bool = True,
     points_mode: str = "RAW",
     threshold: int = 5,
     slope_threshold: int = 10,
 ) -> dict[str, Any]:
     """Return clock sample indexes for SPI analysis after normalizing both channels."""
-    return _MANAGED_SCOPE.spi_sample_indexes(
-        clock_channel,
-        data_channel,
+    clock_scope_channel, data_scope_channel, source_map = resolve_spi_sources(
+        chan_1,
+        chan_2,
+        clock_source,
+        data_source,
+    )
+    result = _MANAGED_SCOPE.spi_sample_indexes(
+        clock_scope_channel,
+        data_scope_channel,
         freeze,
         points_mode,
         threshold,
         slope_threshold,
     )
+    result.update(source_map)
+    return result
 
 
 @mcp.tool()
 def rigol_ds1102e_spi_decode(
-    clock_channel: int = 1,
-    data_channel: int = 2,
+    chan_1: int | None = None,
+    chan_2: int | None = None,
+    clock_source: str | None = None,
+    data_source: str | None = None,
     freeze: bool = True,
     points_mode: str = "RAW",
     threshold: int = 5,
@@ -906,9 +961,15 @@ def rigol_ds1102e_spi_decode(
     time_scale_margin: float = 1.5,
 ) -> dict[str, Any]:
     """Capture, normalize, sample, and decode SPI words from two scope channels."""
-    return _MANAGED_SCOPE.spi_decode(
-        clock_channel,
-        data_channel,
+    clock_scope_channel, data_scope_channel, source_map = resolve_spi_sources(
+        chan_1,
+        chan_2,
+        clock_source,
+        data_source,
+    )
+    result = _MANAGED_SCOPE.spi_decode(
+        clock_scope_channel,
+        data_scope_channel,
         freeze,
         points_mode,
         threshold,
@@ -922,6 +983,8 @@ def rigol_ds1102e_spi_decode(
         time_scale,
         time_scale_margin,
     )
+    result.update(source_map)
+    return result
 
 
 @mcp.tool()
