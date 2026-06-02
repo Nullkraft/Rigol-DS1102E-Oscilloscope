@@ -209,9 +209,9 @@ class ManagedScopeState:
             "status": "ok",
         }
 
-    def build_setup_snapshot(self, channels: list[int],) -> dict[str, Any]:
+    def build_scope_config(self, channels: list[int],) -> dict[str, Any]:
         device = self.scope.device
-        snapshot: dict[str, Any] = {
+        normalized_scope_data: dict[str, Any] = {
             "device": device,
             "identity": self.scope_query(self.scope, "*IDN?"),
             "channels": {},
@@ -233,78 +233,76 @@ class ManagedScopeState:
                 )
             if channel_settings.get("display") == "ON":
                 visible_channels.append(channel)
-            snapshot["channels"][str(channel)] = channel_settings
+            normalized_scope_data["channels"][str(channel)] = channel_settings
 
         for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
-            snapshot["timebase"][setting_name] = self.protocol_query(
+            normalized_scope_data["timebase"][setting_name] = self.protocol_query(
                 self.scope,
                 command_key,
             )
 
         trigger_mode = self.protocol_query(self.scope, "trigger_mode_get")
-        snapshot["trigger"]["mode"] = trigger_mode
-        snapshot["trigger"]["source"] = self.protocol_query(
+        normalized_scope_data["trigger"]["mode"] = trigger_mode
+        normalized_scope_data["trigger"]["source"] = self.protocol_query(
             self.scope,
             "trigger_source_get",
             {"mode": trigger_mode},
         )
-        snapshot["trigger"]["level"] = self.protocol_query(
+        normalized_scope_data["trigger"]["level"] = self.protocol_query(
             self.scope,
             "trigger_level_get",
             {"mode": trigger_mode},
         )
-        snapshot["trigger"]["sweep"] = self.protocol_query(
+        normalized_scope_data["trigger"]["sweep"] = self.protocol_query(
             self.scope,
             "trigger_sweep_get",
             {"mode": trigger_mode},
         )
-        snapshot["trigger"]["holdoff"] = self.protocol_query(
+        normalized_scope_data["trigger"]["holdoff"] = self.protocol_query(
             self.scope,
             "trigger_holdoff_get",
         )
 
         for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
-            snapshot["acquire"][setting_name] = self.protocol_query(
+            normalized_scope_data["acquire"][setting_name] = self.protocol_query(
                 self.scope,
                 command_key,
             )
-        snapshot["acquire"]["sampling_rate"] = {}
+        normalized_scope_data["acquire"]["sampling_rate"] = {}
         for channel in visible_channels:
-            snapshot["acquire"]["sampling_rate"][str(channel)] = self.protocol_query(
+            normalized_scope_data["acquire"]["sampling_rate"][str(channel)] = self.protocol_query(
                 self.scope,
                 "acquire_sampling_rate_get",
                 {"channel": channel},
             )
 
-        snapshot["waveform"]["points_mode"] = self.protocol_query(
+        normalized_scope_data["waveform"]["points_mode"] = self.protocol_query(
             self.scope,
             "waveform_points_mode_get",
         )
-        snapshot["session"]["trigger_status"] = self.protocol_query(
+        normalized_scope_data["session"]["trigger_status"] = self.protocol_query(
             self.scope,
             "trigger_status",
         )
-        return snapshot
+        return normalized_scope_data
 
-    def snapshot_get(self, channels: list[int],) -> dict[str, Any]:
+    def get_scope_config(self, channels: list[int],) -> dict[str, Any]:
         device = self.scope.device
         return {
             "device": device,
             "source": "scope",
-            "snapshot": self.build_setup_snapshot(channels),
+            "normalized_scope_data": self.build_scope_config(channels),
         }
 
-    def apply_profile(self, profile: dict[str, Any], refresh_after: bool,) -> dict[str, Any]:
-        if "snapshot" in profile and isinstance(profile["snapshot"], dict):
-            profile = profile["snapshot"]
+    def apply_profile(self, profile: dict[str, Any],) -> dict[str, Any]:
+        if "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict):
+            profile = profile["normalized_scope_data"]
         scope = self.scope
         device = scope.device
         writes: list[dict[str, Any]] = []
 
         for channel_key, settings in profile.get("channels", {}).items():
             channel = int(channel_key)
-            if channel not in (1, 2):
-                raise ValueError(f"channel must be 1 or 2, got {channel}")
             for setting_name, value in settings.items():
                 mapped = PROFILE_CHANNEL_SETTERS.get(setting_name)
                 if mapped is None:
@@ -371,19 +369,13 @@ class ManagedScopeState:
                 scpi = self.protocol_write(scope, command_key)
                 writes.append({"key": command_key, "params": {}, "scpi": scpi})
 
-        if refresh_after:
-            snapshot = self.build_setup_snapshot([1, 2])
-        else:
-            snapshot = None
-
         return {
             "device": device,
             "status": "ok",
             "writes": writes,
-            "snapshot": snapshot,
         }
 
-    def scope_setup(self, channels: list[int], trigger_mode: str, sweep: str, points_mode: str, run: bool,) -> dict[str, Any]:
+    def prepare_to_capture_spi_bus(self, channels: list[int], trigger_mode: str, sweep: str, points_mode: str, run: bool,) -> dict[str, Any]:
         scope = self.scope
         device = scope.device
         writes: list[dict[str, Any]] = []
@@ -698,6 +690,13 @@ def normalize_channels(channels: list[int] | None) -> list[int]:
     return normalized
 
 
+def validate_profile_channels(profile: dict[str, Any],) -> None:
+    candidate = profile
+    if "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict):
+        candidate = profile["normalized_scope_data"]
+    normalize_channels(list(candidate.get("channels", {}).keys()))
+
+
 def normalize_scope_channel(channel: int, name: str) -> int:
     value = int(channel)
     if value not in (1, 2):
@@ -794,24 +793,24 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 
 
 @mcp.tool()
-def rigol_ds1102e_snapshot_get(
+def rigol_ds1102e_get_scope_config(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Read a full setup snapshot from the scope."""
-    return _MANAGED_SCOPE.snapshot_get(normalize_channels(channels))
+    """Read the current scope configuration from the scope."""
+    return _MANAGED_SCOPE.get_scope_config(normalize_channels(channels))
 
 
 @mcp.tool()
 def rigol_ds1102e_apply_profile(
     profile: dict[str, Any],
-    refresh_after: bool = True,
 ) -> dict[str, Any]:
-    """Apply multiple setup changes in one request and optionally read a setup snapshot afterward."""
-    return _MANAGED_SCOPE.apply_profile(profile, refresh_after)
+    """Apply multiple setup changes in one request."""
+    validate_profile_channels(profile)
+    return _MANAGED_SCOPE.apply_profile(profile)
 
 
 @mcp.tool()
-def rigol_ds1102e_scope_setup(
+def rigol_ds1102e_prepare_to_capture_spi_bus(
     channels: list[int] | None = None,
     trigger_mode: str = "EDGE",
     sweep: str = "SINGLE",
@@ -819,7 +818,7 @@ def rigol_ds1102e_scope_setup(
     run: bool = False,
 ) -> dict[str, Any]:
     """Prepare the scope for single-trigger RAW waveform capture."""
-    return _MANAGED_SCOPE.scope_setup(
+    return _MANAGED_SCOPE.prepare_to_capture_spi_bus(
         normalize_channels(channels),
         trigger_mode,
         sweep,
