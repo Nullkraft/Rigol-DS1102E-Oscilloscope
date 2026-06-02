@@ -3,6 +3,7 @@
 import argparse
 import glob
 import os
+import threading
 import time
 
 
@@ -19,30 +20,51 @@ class RigolDS1102E:
         self.device = device
         self.query_delay = query_delay
         self.read_size = read_size
+        self._fd = None
+        self._io_lock = threading.Lock()
 
     def write(self, command):
         payload = self._normalize_command(command)
-        fd = self._open_device()
-        try:
-            os.write(fd, payload)
-        finally:
-            os.close(fd)
+        with self._io_lock:
+            os.write(self.open(), payload)
 
     def query(self, command, delay=None, read_size=None):
+        response = self.query_bytes(command, delay, read_size)
+        return response.decode("ascii", "replace").replace("\x00", "").strip()
+
+    def query_bytes(self, command, delay=None, read_size=None):
         payload = self._normalize_command(command)
         wait_time = self.query_delay if delay is None else delay
         max_bytes = self.read_size if read_size is None else read_size
-        fd = self._open_device()
-        try:
+        with self._io_lock:
+            fd = self.open()
             os.write(fd, payload)
             time.sleep(wait_time)
-            response = os.read(fd, max_bytes)
-        finally:
-            os.close(fd)
-        return response.decode("ascii", "replace").replace("\x00", "").strip()
+            return os.read(fd, max_bytes)
 
     def identify(self):
         return self.query("*IDN?")
+
+    def open(self):
+        if self._fd is None:
+            self._fd = self._open_device()
+        return self._fd
+
+    def close(self):
+        with self._io_lock:
+            self._close_unlocked()
+
+    def reconnect(self, device=None):
+        with self._io_lock:
+            self._close_unlocked()
+            if device is not None:
+                self.device = device
+            return self.open()
+
+    def _close_unlocked(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
 
     def _open_device(self):
         try:
@@ -78,9 +100,14 @@ def discover_ds1102e_device(query_delay=0.2, read_size=4096):
             identity = scope.identify()
         except Exception:
             continue
+        finally:
+            scope.close()
         if identity.startswith(RIGOL_DS1102E_IDN_PREFIX):
             return device
-    raise RuntimeError("Could not find a DS1102E by probing USBTMC devices with *IDN?.")
+    raise RuntimeError(
+        "Could not find a DS1102E by probing USBTMC devices with *IDN?. "
+        "Try plugging in the usb cable to the scope."
+    )
 
 
 def build_parser():

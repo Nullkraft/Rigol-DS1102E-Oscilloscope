@@ -8,15 +8,16 @@
 
 import base64
 from datetime import datetime, timezone
-import glob
-import os
-import threading
-import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from rigol_ds1102e import RigolDS1102E
+from rigol_ds1102e import (
+    DEFAULT_GLOB_PATTERNS,
+    RigolDS1102E,
+    discover_ds1102e_device as discover_rigol_ds1102e_device,
+    list_candidate_devices,
+)
 from rigol_ds1102e_protocol import PROTOCOL, get_command, is_excluded_command, render_command
 from rigol_ds1102e_spi_analysis import (
     decode_spi_data_words,
@@ -26,13 +27,6 @@ from rigol_ds1102e_spi_analysis import (
     validate_expected_addresses,
 )
 
-
-DEFAULT_GLOB_PATTERNS = (
-    "/dev/usbtmc*",
-    "/dev/usbmisc/usbtmc*",
-    "/dev/usb/usbtmc*",
-)
-RIGOL_DS1102E_IDN_PREFIX = "RIGOL TECHNOLOGIES,DS1102E"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
 
@@ -80,90 +74,45 @@ PROFILE_WAVEFORM_SETTERS = {
     "points_mode": "waveform_points_mode_set",
 }
 
-def list_candidate_devices() -> list[str]:
-    devices: list[str] = []
-    for pattern in DEFAULT_GLOB_PATTERNS:
-        devices.extend(glob.glob(pattern))
-    return sorted(set(devices))
-
-
 class ManagedScopeState:
     def __init__(self) -> None:
         self.scope_setup_cache: dict[str, dict[str, Any]] = {}
-        self.active_device: str | None = None
-        self.active_device_fd: int | None = None
-        self.device_fd_lock = threading.Lock()
         self.scope = self.open_discovered_scope(delay=0.2, read_size=4096)
-        self.active_device_fd = self.scope._open_device()
-        self.active_device = self.scope.device
 
     def discover_ds1102e_device(self) -> str:
-        for device in list_candidate_devices():
-            scope = RigolDS1102E(device=device, query_delay=0.2, read_size=4096)
-            try:
-                identity = scope.identify()
-            except Exception:
-                continue
-            if identity.startswith(RIGOL_DS1102E_IDN_PREFIX):
-                return device
-        raise RuntimeError(
-            "Could not find a DS1102E by probing USBTMC devices with *IDN?. "
-            "Try plugging in the usb cable to the scope."
-        )
+        return discover_rigol_ds1102e_device()
 
     def open_discovered_scope(self, delay: float, read_size: int) -> RigolDS1102E:
         device = self.discover_ds1102e_device()
-        return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
+        scope = RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
+        scope.open()
+        return scope
 
     def current_scope(self, delay: float, read_size: int) -> RigolDS1102E:
         self.scope.query_delay = delay
         self.scope.read_size = read_size
         return self.scope
 
-    def active_device_fd_for_scope(self) -> int:
-        if self.active_device_fd is None:
-            self.active_device_fd = self.scope._open_device()
-            self.active_device = self.scope.device
-        return self.active_device_fd
-
-    def close_active_device_fd(self) -> None:
-        if self.active_device_fd is not None:
-            os.close(self.active_device_fd)
-        self.active_device_fd = None
-        self.active_device = None
-
     def reconnect_scope(self, delay: float, read_size: int) -> RigolDS1102E:
-        self.close_active_device_fd()
-        self.scope.device = self.discover_ds1102e_device()
+        device = self.discover_ds1102e_device()
         self.scope.query_delay = delay
         self.scope.read_size = read_size
-        self.active_device_fd = self.scope._open_device()
-        self.active_device = self.scope.device
+        self.scope.reconnect(device)
         return self.scope
 
     def scope_write(self, scope: RigolDS1102E, scpi: str) -> None:
-        payload = scope._normalize_command(scpi)
-        with self.device_fd_lock:
-            try:
-                os.write(self.active_device_fd_for_scope(), payload)
-            except OSError:
-                scope = self.reconnect_scope(scope.query_delay, scope.read_size)
-                os.write(self.active_device_fd_for_scope(), payload)
+        try:
+            scope.write(scpi)
+        except OSError:
+            scope = self.reconnect_scope(scope.query_delay, scope.read_size)
+            scope.write(scpi)
 
     def scope_query_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
-        payload = scope._normalize_command(scpi)
-        with self.device_fd_lock:
-            try:
-                fd = self.active_device_fd_for_scope()
-                os.write(fd, payload)
-                time.sleep(delay)
-                return os.read(fd, read_size)
-            except OSError:
-                scope = self.reconnect_scope(delay, read_size)
-                fd = self.active_device_fd_for_scope()
-                os.write(fd, payload)
-                time.sleep(delay)
-                return os.read(fd, read_size)
+        try:
+            return scope.query_bytes(scpi, delay, read_size)
+        except OSError:
+            scope = self.reconnect_scope(delay, read_size)
+            return scope.query_bytes(scpi, delay, read_size)
 
     def scope_query(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> str:
         response = self.scope_query_bytes(scope, scpi, delay, read_size)
