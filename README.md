@@ -2,7 +2,7 @@
 
 If you get a reading with no numbers, use `rigol_ds1102e_protocol_command` with `key="auto_setup"` or send `:AUTO`.
 
-Canonical scope selection is now done by probing every plausible `usbtmc` device with `*IDN?` and selecting the one that reports `RIGOL TECHNOLOGIES,DS1102E`. The server does not trust `/dev/usbtmc` numbering for identity, and operational calls do not trust a caller-supplied device path when the scope can be identified directly.
+Canonical scope selection is done by probing every plausible `usbtmc` device with `*IDN?` and selecting the one that reports `RIGOL TECHNOLOGIES,DS1102E`. The server does not trust `/dev/usbtmc` numbering for identity, and MCP tools do not accept caller-supplied device paths.
 
 MCP tools:
 
@@ -23,7 +23,7 @@ MCP tools:
 
 For `rigol_ds1102e_protocol_command`, `key` must match a supported command key from `rigol_ds1102e_list_protocol_commands()`. `params` is a JSON object whose fields match that key's `args`. Examples: `{"channel": 1}` for `channel_scale_get`, `{"channel": 1, "scale": 0.5}` for `channel_scale_set`.
 
-The `device` argument remains in the tool schemas for compatibility, but canonical scope selection is determined by IDN probing rather than by trusting `/dev/usbtmc0` or any other caller-supplied device path.
+If no DS1102E can be identified at startup, the MCP server exits and tells the technician to try plugging in the USB cable to the scope.
 
 Settings snapshots read identity, channel setup, timebase, trigger, acquire, waveform point mode, and trigger status directly from the scope. `rigol_ds1102e_snapshot_get` returns the cached snapshot when it is fresh and refreshes only when the cache is missing or stale. `rigol_ds1102e_snapshot_cached` never queries the scope. `rigol_ds1102e_snapshot_refresh` always queries the scope and stores a fresh snapshot.
 
