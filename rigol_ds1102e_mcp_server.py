@@ -80,11 +80,6 @@ PROFILE_WAVEFORM_SETTERS = {
     "points_mode": "waveform_points_mode_set",
 }
 
-
-def utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def list_candidate_devices() -> list[str]:
     devices: list[str] = []
     for pattern in DEFAULT_GLOB_PATTERNS:
@@ -267,7 +262,6 @@ class ManagedScopeState:
     def identify(self, delay: float, read_size: int) -> dict[str, Any]:
         scope = self.current_scope(delay, read_size)
         return {
-            "timestamp": utc_timestamp(),
             "device": scope.device,
             "response": self.scope_query(scope, "*IDN?", delay, read_size),
         }
@@ -275,7 +269,6 @@ class ManagedScopeState:
     def query(self, scpi: str, delay: float, read_size: int) -> dict[str, Any]:
         scope = self.current_scope(delay, read_size)
         return {
-            "timestamp": utc_timestamp(),
             "device": scope.device,
             "scpi": scpi,
             "response": self.scope_query(scope, scpi, delay, read_size),
@@ -287,7 +280,6 @@ class ManagedScopeState:
         device = scope.device
         self.mark_cache_stale(device, f"raw write: {scpi}")
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "scpi": scpi,
             "status": "ok",
@@ -306,7 +298,6 @@ class ManagedScopeState:
         scope = self.current_scope(delay, read_size)
         device = scope.device
         snapshot: dict[str, Any] = {
-            "timestamp": utc_timestamp(),
             "device": device,
             "identity": self.scope_query(scope, "*IDN?", delay, read_size),
             "channels": {},
@@ -318,7 +309,7 @@ class ManagedScopeState:
             "cache": {
                 "state": "fresh",
                 "reason": "snapshot_refresh",
-                "timestamp": utc_timestamp(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -416,13 +407,11 @@ class ManagedScopeState:
         device, cached = self.get_cached_snapshot()
         if cached is not None and cached.get("cache", {}).get("state") == "fresh":
             return {
-                "timestamp": utc_timestamp(),
                 "device": device,
                 "source": "cache",
                 "snapshot": cached,
             }
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "source": "scope",
             "snapshot": self.build_setup_snapshot(delay, read_size, channels),
@@ -431,7 +420,6 @@ class ManagedScopeState:
     def snapshot_cached(self) -> dict[str, Any]:
         device, cached = self.get_cached_snapshot()
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "found": cached is not None,
             "snapshot": cached,
@@ -445,7 +433,6 @@ class ManagedScopeState:
     ) -> dict[str, Any]:
         device = self.scope.device
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "source": "scope",
             "snapshot": self.build_setup_snapshot(delay, read_size, channels),
@@ -544,7 +531,6 @@ class ManagedScopeState:
             cache_state = "stale"
 
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "status": "ok",
             "writes": writes,
@@ -585,7 +571,6 @@ class ManagedScopeState:
 
         self.mark_cache_stale(device, "scope setup applied")
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "status": "ok",
             "writes": writes,
@@ -625,7 +610,6 @@ class ManagedScopeState:
 
         self.mark_cache_stale(device, "waveform data captured")
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "status": "ok",
             "writes": writes,
@@ -668,7 +652,6 @@ class ManagedScopeState:
 
         self.mark_cache_stale(device, "SPI sample indexes analyzed")
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "status": "ok",
             "writes": writes,
@@ -799,7 +782,6 @@ class ManagedScopeState:
 
         self.mark_cache_stale(device, "SPI data decoded")
         return {
-            "timestamp": utc_timestamp(),
             "device": device,
             "status": "ok",
             "writes": writes,
@@ -846,7 +828,6 @@ class ManagedScopeState:
         scope = self.current_scope(delay, read_size)
         device = scope.device
         result: dict[str, Any] = {
-            "timestamp": utc_timestamp(),
             "device": device,
             "key": command.key,
             "family": command.family,
@@ -870,7 +851,7 @@ class ManagedScopeState:
             cached["cache"] = {
                 "state": "stale",
                 "reason": reason,
-                "timestamp": utc_timestamp(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
 
@@ -930,7 +911,6 @@ def list_ports() -> dict[str, Any]:
         discovered_ds1102e_device = None
         discovery_error = str(exc)
     return {
-        "timestamp": utc_timestamp(),
         "devices": list_candidate_devices(),
         "discovered_ds1102e_device": discovered_ds1102e_device,
         "discovery_error": discovery_error,
@@ -985,7 +965,6 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
             }
         )
     return {
-        "timestamp": utc_timestamp(),
         "commands": commands,
     }
 
