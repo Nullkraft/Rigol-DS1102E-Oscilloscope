@@ -480,23 +480,17 @@ class ManagedScopeState:
             threshold=threshold,
             slope_threshold=slope_threshold,
         )
-        expected_edges = expected_writes * 32 if expected_writes is not None else None
 
         if expected_writes is not None and window_scan:
-            try:
-                decoded = decode_spi_data_words_windowed(
-                    data_samples,
-                    sample_indexes,
-                    expected_writes=expected_writes,
-                    max_extra_edges=max_extra_edges,
-                    low_ratio=low_ratio,
-                    high_ratio=high_ratio,
-                    expected_addresses=expected_addresses,
-                )
-            except ValueError:
-                if expected_addresses is None or expected_edges is None:
-                    raise
-                raise
+            decoded = decode_spi_data_words_windowed(
+                data_samples,
+                sample_indexes,
+                expected_writes=expected_writes,
+                max_extra_edges=max_extra_edges,
+                low_ratio=low_ratio,
+                high_ratio=high_ratio,
+                expected_addresses=expected_addresses,
+            )
             selected_indexes = sample_indexes[
                 decoded["window"]["selected_start"] : decoded["window"]["selected_stop"]  # type: ignore[index]
             ]
