@@ -50,8 +50,8 @@ To test the Rigol MCP through a real stdio client in the local environment, run 
 `list_ports()` now reports:
 
 - `devices`: plausible USBTMC nodes
-- `resolved_default_device`: the DS1102E found by `*IDN?`, or `null`
-- `resolved_default_error`: the discovery error string when no DS1102E is found
+- `discovered_ds1102e_device`: the DS1102E found by `*IDN?`, or `null`
+- `discovery_error`: the discovery error string when no DS1102E is found
 - `patterns`: the device-glob patterns used during discovery
 
 Example Inspector calls for `rigol_ds1102e_protocol_command`:

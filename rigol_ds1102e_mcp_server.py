@@ -99,7 +99,7 @@ class ManagedScopeState:
         self.active_device_fd: int | None = None
         self.device_fd_lock = threading.Lock()
 
-    def resolve_default_device(self) -> str:
+    def discover_ds1102e_device(self) -> str:
         for device in list_candidate_devices():
             scope = RigolDS1102E(device=device, query_delay=0.2, read_size=4096)
             try:
@@ -114,7 +114,7 @@ class ManagedScopeState:
         )
 
     def build_scope(self, delay: float, read_size: int) -> RigolDS1102E:
-        device = self.resolve_default_device()
+        device = self.discover_ds1102e_device()
         return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
 
     def active_device_fd_for_scope(self, scope: RigolDS1102E) -> int:
@@ -286,7 +286,7 @@ class ManagedScopeState:
         }
 
     def get_cached_snapshot(self) -> tuple[str, dict[str, Any] | None]:
-        device = self.resolve_default_device()
+        device = self.discover_ds1102e_device()
         return device, self.scope_setup_cache.get(device)
 
     def build_setup_snapshot(
@@ -435,7 +435,7 @@ class ManagedScopeState:
         read_size: int,
         channels: list[int],
     ) -> dict[str, Any]:
-        device = self.resolve_default_device()
+        device = self.discover_ds1102e_device()
         return {
             "timestamp": utc_timestamp(),
             "device": device,
@@ -867,11 +867,11 @@ class ManagedScopeState:
 
 
 _MANAGED_SCOPE = ManagedScopeState()
-_MANAGED_SCOPE.resolve_default_device()
+_MANAGED_SCOPE.discover_ds1102e_device()
 
 
-def resolve_default_device() -> str:
-    return _MANAGED_SCOPE.resolve_default_device()
+def discover_ds1102e_device() -> str:
+    return _MANAGED_SCOPE.discover_ds1102e_device()
 
 
 def is_supported_protocol_command(key: str) -> bool:
@@ -915,18 +915,18 @@ def normalize_channels(channels: list[int] | None) -> list[int]:
 @mcp.tool()
 def list_ports() -> dict[str, Any]:
     """List likely USBTMC device nodes for the Rigol DS1102E."""
-    resolved_default_device: str | None
-    resolved_default_error: str | None = None
+    discovered_ds1102e_device: str | None
+    discovery_error: str | None = None
     try:
-        resolved_default_device = resolve_default_device()
+        discovered_ds1102e_device = discover_ds1102e_device()
     except RuntimeError as exc:
-        resolved_default_device = None
-        resolved_default_error = str(exc)
+        discovered_ds1102e_device = None
+        discovery_error = str(exc)
     return {
         "timestamp": utc_timestamp(),
         "devices": list_candidate_devices(),
-        "resolved_default_device": resolved_default_device,
-        "resolved_default_error": resolved_default_error,
+        "discovered_ds1102e_device": discovered_ds1102e_device,
+        "discovery_error": discovery_error,
         "patterns": list(DEFAULT_GLOB_PATTERNS),
     }
 
