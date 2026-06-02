@@ -795,11 +795,6 @@ class ManagedScopeState:
 
 _MANAGED_SCOPE = ManagedScopeState()
 
-
-def discover_ds1102e_device() -> str:
-    return _MANAGED_SCOPE.discover_ds1102e_device()
-
-
 def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
     return not is_excluded_command(command.template)
@@ -844,7 +839,7 @@ def list_ports() -> dict[str, Any]:
     discovered_ds1102e_device: str | None
     discovery_error: str | None = None
     try:
-        discovered_ds1102e_device = discover_ds1102e_device()
+        discovered_ds1102e_device = _MANAGED_SCOPE.discover_ds1102e_device()
     except RuntimeError as exc:
         discovered_ds1102e_device = None
         discovery_error = str(exc)
