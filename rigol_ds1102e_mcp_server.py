@@ -98,6 +98,9 @@ class ManagedScopeState:
         self.active_device: str | None = None
         self.active_device_fd: int | None = None
         self.device_fd_lock = threading.Lock()
+        self.scope = self.open_discovered_scope(delay=0.2, read_size=4096)
+        self.active_device_fd = self.scope._open_device()
+        self.active_device = self.scope.device
 
     def discover_ds1102e_device(self) -> str:
         for device in list_candidate_devices():
@@ -113,18 +116,19 @@ class ManagedScopeState:
             "Try plugging in the usb cable to the scope."
         )
 
-    def build_scope(self, delay: float, read_size: int) -> RigolDS1102E:
+    def open_discovered_scope(self, delay: float, read_size: int) -> RigolDS1102E:
         device = self.discover_ds1102e_device()
         return RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
 
-    def active_device_fd_for_scope(self, scope: RigolDS1102E) -> int:
-        if self.active_device_fd is not None and self.active_device != scope.device:
-            os.close(self.active_device_fd)
-            self.active_device_fd = None
-            self.active_device = None
+    def current_scope(self, delay: float, read_size: int) -> RigolDS1102E:
+        self.scope.query_delay = delay
+        self.scope.read_size = read_size
+        return self.scope
+
+    def active_device_fd_for_scope(self) -> int:
         if self.active_device_fd is None:
-            self.active_device_fd = scope._open_device()
-            self.active_device = scope.device
+            self.active_device_fd = self.scope._open_device()
+            self.active_device = self.scope.device
         return self.active_device_fd
 
     def close_active_device_fd(self) -> None:
@@ -133,31 +137,35 @@ class ManagedScopeState:
         self.active_device_fd = None
         self.active_device = None
 
-    def rebuild_scope(self, scope: RigolDS1102E) -> RigolDS1102E:
-        return self.build_scope(scope.query_delay, scope.read_size)
+    def reconnect_scope(self, delay: float, read_size: int) -> RigolDS1102E:
+        self.close_active_device_fd()
+        self.scope.device = self.discover_ds1102e_device()
+        self.scope.query_delay = delay
+        self.scope.read_size = read_size
+        self.active_device_fd = self.scope._open_device()
+        self.active_device = self.scope.device
+        return self.scope
 
     def scope_write(self, scope: RigolDS1102E, scpi: str) -> None:
         payload = scope._normalize_command(scpi)
         with self.device_fd_lock:
             try:
-                os.write(self.active_device_fd_for_scope(scope), payload)
+                os.write(self.active_device_fd_for_scope(), payload)
             except OSError:
-                self.close_active_device_fd()
-                scope = self.rebuild_scope(scope)
-                os.write(self.active_device_fd_for_scope(scope), payload)
+                scope = self.reconnect_scope(scope.query_delay, scope.read_size)
+                os.write(self.active_device_fd_for_scope(), payload)
 
     def scope_query_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
         payload = scope._normalize_command(scpi)
         with self.device_fd_lock:
             try:
-                fd = self.active_device_fd_for_scope(scope)
+                fd = self.active_device_fd_for_scope()
                 os.write(fd, payload)
                 time.sleep(delay)
                 return os.read(fd, read_size)
             except OSError:
-                self.close_active_device_fd()
-                scope = self.rebuild_scope(scope)
-                fd = self.active_device_fd_for_scope(scope)
+                scope = self.reconnect_scope(delay, read_size)
+                fd = self.active_device_fd_for_scope()
                 os.write(fd, payload)
                 time.sleep(delay)
                 return os.read(fd, read_size)
@@ -257,7 +265,7 @@ class ManagedScopeState:
         return writes, captured_channels
 
     def identify(self, delay: float, read_size: int) -> dict[str, Any]:
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         return {
             "timestamp": utc_timestamp(),
             "device": scope.device,
@@ -265,7 +273,7 @@ class ManagedScopeState:
         }
 
     def query(self, scpi: str, delay: float, read_size: int) -> dict[str, Any]:
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         return {
             "timestamp": utc_timestamp(),
             "device": scope.device,
@@ -274,7 +282,7 @@ class ManagedScopeState:
         }
 
     def write(self, scpi: str) -> dict[str, Any]:
-        scope = self.build_scope(delay=0.2, read_size=4096)
+        scope = self.current_scope(delay=0.2, read_size=4096)
         self.scope_write(scope, scpi)
         device = scope.device
         self.mark_cache_stale(device, f"raw write: {scpi}")
@@ -286,7 +294,7 @@ class ManagedScopeState:
         }
 
     def get_cached_snapshot(self) -> tuple[str, dict[str, Any] | None]:
-        device = self.discover_ds1102e_device()
+        device = self.scope.device
         return device, self.scope_setup_cache.get(device)
 
     def build_setup_snapshot(
@@ -295,7 +303,7 @@ class ManagedScopeState:
         read_size: int,
         channels: list[int],
     ) -> dict[str, Any]:
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         snapshot: dict[str, Any] = {
             "timestamp": utc_timestamp(),
@@ -435,7 +443,7 @@ class ManagedScopeState:
         read_size: int,
         channels: list[int],
     ) -> dict[str, Any]:
-        device = self.discover_ds1102e_device()
+        device = self.scope.device
         return {
             "timestamp": utc_timestamp(),
             "device": device,
@@ -452,7 +460,7 @@ class ManagedScopeState:
     ) -> dict[str, Any]:
         if "snapshot" in profile and isinstance(profile["snapshot"], dict):
             profile = profile["snapshot"]
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         writes: list[dict[str, Any]] = []
 
@@ -554,7 +562,7 @@ class ManagedScopeState:
         delay: float,
         read_size: int,
     ) -> dict[str, Any]:
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         writes: list[dict[str, Any]] = []
 
@@ -593,7 +601,7 @@ class ManagedScopeState:
         delay: float,
         read_size: int,
     ) -> dict[str, Any]:
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         selected_channels = normalize_channels(channels)
         writes, raw_channels = self.capture_waveform_channels(
@@ -639,7 +647,7 @@ class ManagedScopeState:
         if clock_channel == data_channel:
             raise ValueError("clock_channel and data_channel must be different")
 
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         writes, raw_channels = self.capture_waveform_channels(
             scope,
@@ -730,7 +738,7 @@ class ManagedScopeState:
         if not 1.0 <= time_scale_margin <= 2.0:
             raise ValueError("time_scale_margin must be between 1.0 and 2.0")
 
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         writes: list[dict[str, Any]] = []
         current_time_scale = time_scale
@@ -835,7 +843,7 @@ class ManagedScopeState:
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
 
-        scope = self.build_scope(delay, read_size)
+        scope = self.current_scope(delay, read_size)
         device = scope.device
         result: dict[str, Any] = {
             "timestamp": utc_timestamp(),
@@ -867,7 +875,6 @@ class ManagedScopeState:
 
 
 _MANAGED_SCOPE = ManagedScopeState()
-_MANAGED_SCOPE.discover_ds1102e_device()
 
 
 def discover_ds1102e_device() -> str:
