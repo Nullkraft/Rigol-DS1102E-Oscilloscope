@@ -29,7 +29,7 @@ from rigol_ds1102e_spi_analysis import (
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
 
-SNAPSHOT_CHANNEL_KEYS = (
+SCOPE_CONFIG_CHANNEL_KEYS = (
     ("display", "channel_display_get"),
     ("coupling", "channel_coupling_get"),
     ("probe", "channel_probe_get"),
@@ -37,12 +37,12 @@ SNAPSHOT_CHANNEL_KEYS = (
     ("offset", "channel_offset_get"),
 )
 
-SNAPSHOT_TIMEBASE_KEYS = (
+SCOPE_CONFIG_TIMEBASE_KEYS = (
     ("scale", "timebase_scale_get"),
     ("offset", "timebase_offset_get"),
 )
 
-SNAPSHOT_ACQUIRE_KEYS = (
+SCOPE_CONFIG_ACQUIRE_KEYS = (
     ("type", "acquire_type_get"),
     ("mode", "acquire_mode_get"),
     ("averages", "acquire_averages_get"),
@@ -212,7 +212,7 @@ class ManagedScopeState:
         visible_channels: list[int] = []
         for channel in channels:
             channel_settings: dict[str, str] = {}
-            for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
+            for setting_name, command_key in SCOPE_CONFIG_CHANNEL_KEYS:
                 channel_settings[setting_name] = self.protocol_query(
                     command_key,
                     {"channel": channel},
@@ -221,7 +221,7 @@ class ManagedScopeState:
                 visible_channels.append(channel)
             normalized_scope_data["channels"][str(channel)] = channel_settings
 
-        for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
+        for setting_name, command_key in SCOPE_CONFIG_TIMEBASE_KEYS:
             normalized_scope_data["timebase"][setting_name] = self.protocol_query(
                 command_key,
             )
@@ -244,7 +244,7 @@ class ManagedScopeState:
             "trigger_holdoff_get",
         )
 
-        for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
+        for setting_name, command_key in SCOPE_CONFIG_ACQUIRE_KEYS:
             normalized_scope_data["acquire"][setting_name] = self.protocol_query(
                 command_key,
             )
