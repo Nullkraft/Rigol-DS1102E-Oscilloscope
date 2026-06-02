@@ -194,9 +194,6 @@ class ManagedScopeState:
         self.scope_write(scope, scpi)
         return scpi
 
-    def query_raw_bytes(self, scope: RigolDS1102E, scpi: str, delay: float, read_size: int) -> bytes:
-        return self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
-
     def query_waveform_bytes(
         self,
         scope: RigolDS1102E,
@@ -204,11 +201,11 @@ class ManagedScopeState:
         delay: float,
         read_size: int,
     ) -> bytes:
-        data = self.query_raw_bytes(scope, scpi, delay, read_size)
+        data = self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
         for _ in range(4):
             if len(data) != 600 or read_size <= 600:
                 break
-            reread = self.query_raw_bytes(scope, scpi, delay, read_size)
+            reread = self.scope_query_bytes(scope, scpi, delay, read_size).rstrip(b"\n")
             if len(reread) > len(data):
                 data = reread
             elif len(reread) != 600:
