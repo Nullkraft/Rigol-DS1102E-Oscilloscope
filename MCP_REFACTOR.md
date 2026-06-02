@@ -9,7 +9,7 @@ Refactor this repo so the MCP server is centered on one explicit scope object, w
 Right now the design is split awkwardly:
 
   - rigol_ds1102e.py:7 has a small RigolDS1102E wrapper.
-  - rigol_ds1102e_mcp_server.py:35 owns real state through globals like _ACTIVE_DEVICE_FD, _ACTIVE_DEVICE, cache dicts, and retry logic.
+  - rigol_ds1102e_mcp_server.py:35 owns real state through globals like _ACTIVE_DEVICE_FD, _ACTIVE_DEVICE, snapshot state, and retry logic.
   - Tool functions repeatedly call build_scope(...) instead of operating on a managed server-side object.
 
 That gives you request-oriented code, but not a coherent object model.
@@ -22,7 +22,7 @@ One managed object inside the server, something like RigolScopeServer or RigolSc
   - connection lifecycle
   - active file descriptor
   - retry/reconnect behavior
-  - scope snapshot cache
+  - scope snapshot handling
   - raw SCPI read/write/query
   - waveform capture
   - generic SPI decode helpers
@@ -38,7 +38,7 @@ Then MCP tool functions become thin wrappers that call methods on that object.
   - resolve device
   - ensure connection
   - send/query SCPI
-  - update cache
+  - return updated scope state
   - recover from disconnects if needed
 5. Tool handler returns JSON result.
 
@@ -56,7 +56,7 @@ That means the server owns scope behavior, while the tool layer only translates 
   - IDN-based scope discovery
   - active fd management
   - close/reopen logic
-  - cache invalidation/refresh
+  - snapshot read behavior
 
 3. Move generic operations into methods.
   - raw write
@@ -71,7 +71,7 @@ That means the server owns scope behavior, while the tool layer only translates 
   - normalize args
   - call one method
   - return its result
-  - No tool should own connection policy or cache policy. (or scope settings)
+  - No tool should own connection policy or snapshot policy. (or scope settings)
 
 5. Decide the device model explicitly.
   - Single active scope object for the server process.
@@ -107,7 +107,7 @@ For this branch, I would avoid:
 
 #### The refactor is done when:
 
-  - there are no module-level globals for active scope state or cache state
+  - there are no module-level globals for active scope state or snapshot state
   - tool functions no longer construct ad hoc scope wrappers all over the file
   - one explicit object owns scope/session behavior
   - existing tools still work with the same external behavior
@@ -116,7 +116,7 @@ For this branch, I would avoid:
 #### Implementation Order
 
 [ ] 1. Extract the managed scope class.
-[ ] 2. Move fd/cache/device logic into it.
+[ ] 2. Move fd/snapshot/device logic into it.
 [ ] 3. Convert low-level helpers to instance methods.
 [ ] 4. Convert tool handlers one group at a time.
 [ ] 5. Remove dead wrappers like build_scope/rebuild_scope if they become obsolete.
@@ -147,4 +147,3 @@ At that point the file will tell the truth about ownership. Then a second dead-c
 
 ----------------
 What’s next is no longer dead-code cleanup. The next question is whether you want to keep helper functions like query_protocol_value, write_protocol_value, query_waveform_bytes, require_stopped_scope, and capture_waveform_channels at module scope, or move those onto ManagedScopeState too so the file becomes structurally honest end to end.
-
