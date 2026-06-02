@@ -13,7 +13,7 @@ MCP tools:
 - `rigol_ds1102e_list_protocol_commands()`
 - `rigol_ds1102e_protocol_command(key, params=None)`
 - `rigol_ds1102e_get_scope_config(channels=None)`
-- `rigol_ds1102e_apply_profile(profile, refresh_after=True)`
+- `rigol_ds1102e_apply_profile(profile)`
 - `rigol_ds1102e_prepare_to_capture_spi_bus(channels=None, trigger_mode="EDGE", sweep="SINGLE", points_mode="RAW", run=False)`
 - `rigol_ds1102e_data_capture(channels=None, freeze=True, points_mode="RAW", encoding="list")`
 - `rigol_ds1102e_spi_sample_indexes(chan_1=None, chan_2=None, clock_source=None, data_source=None, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10)`
@@ -26,7 +26,7 @@ If no DS1102E can be identified at startup, the MCP server exits and tells the t
 
 `rigol_ds1102e_get_scope_config` reads identity, channel setup, timebase, trigger, acquire, waveform point mode, and trigger status directly from the scope. It always queries the scope for live normalized scope data.
 
-`rigol_ds1102e_apply_profile` accepts a profile map with optional `channels`, `timebase`, `trigger`, `acquire`, `waveform`, and `session` sections, applies those settings, and returns live `normalized_scope_data` when `refresh_after=True`. Measurement protocol commands remain direct/live scope queries.
+`rigol_ds1102e_apply_profile` accepts a profile map with optional `channels`, `timebase`, `trigger`, `acquire`, `waveform`, and `session` sections and applies those settings. Use `rigol_ds1102e_get_scope_config` for an explicit post-write readback. Measurement protocol commands remain direct/live scope queries.
 
 `rigol_ds1102e_data_capture` captures selected waveform channels with no one's-complement, normalization, thresholding, or edge detection. Use it for raw single-channel or combined CH1/CH2 capture. With `freeze=True`, the shared capture helper sends `:STOP` and verifies `:TRIGger:STATus?` reports `STOP` before waveform reads, resending `:STOP` if the scope reports `WAIT`. If the stopped scope returns the known short 600-byte waveform response, the helper rereads the channel a few times before returning data.
 
