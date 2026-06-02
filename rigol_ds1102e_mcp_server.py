@@ -10,7 +10,6 @@ import base64
 from datetime import datetime, timezone
 import glob
 import os
-from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -34,7 +33,6 @@ DEFAULT_GLOB_PATTERNS = (
     "/dev/usb/usbtmc*",
 )
 DEFAULT_DEVICE = "/dev/usbtmc0"
-RIGOL_VENDOR_ID = "1ab1"
 RIGOL_DS1102E_IDN_PREFIX = "RIGOL TECHNOLOGIES,DS1102E"
 
 mcp = FastMCP("rigol_ds1102e", json_response=True)
@@ -86,50 +84,6 @@ PROFILE_WAVEFORM_SETTERS = {
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def read_sysfs_text(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="ascii").strip()
-    except OSError:
-        return None
-
-
-def find_usb_device_dir(sysfs_path: Path) -> Path | None:
-    for parent in (sysfs_path.resolve(), *sysfs_path.resolve().parents):
-        if (parent / "idVendor").exists() and (parent / "idProduct").exists():
-            return parent
-    return None
-
-
-def build_usbtmc_record(sysfs_path: Path) -> dict[str, Any]:
-    device = f"/dev/{sysfs_path.name}"
-    record: dict[str, Any] = {
-        "device": device,
-        "sysfs": str(sysfs_path),
-    }
-    usb_device_dir = find_usb_device_dir(sysfs_path)
-    if usb_device_dir is None:
-        return record
-
-    for key in ("idVendor", "idProduct", "manufacturer", "product", "serial"):
-        value = read_sysfs_text(usb_device_dir / key)
-        if value is not None:
-            record[key] = value
-    record["usb_path"] = usb_device_dir.name
-    return record
-
-
-def list_candidate_device_records() -> list[dict[str, Any]]:
-    records: dict[str, dict[str, Any]] = {}
-    for sysfs_path in sorted(Path("/sys/class/usbmisc").glob("usbtmc*")):
-        record = build_usbtmc_record(sysfs_path)
-        records[record["device"]] = record
-
-    for device in list_candidate_devices():
-        records.setdefault(device, {"device": device})
-
-    return [records[device] for device in sorted(records)]
 
 
 def list_candidate_devices() -> list[str]:
@@ -980,7 +934,6 @@ def list_ports() -> dict[str, Any]:
     return {
         "timestamp": utc_timestamp(),
         "devices": list_candidate_devices(),
-        "device_records": list_candidate_device_records(),
         "resolved_default_device": resolved_default_device,
         "resolved_default_error": resolved_default_error,
         "patterns": list(DEFAULT_GLOB_PATTERNS),
