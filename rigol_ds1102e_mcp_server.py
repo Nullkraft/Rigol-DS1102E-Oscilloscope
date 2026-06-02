@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from rigol_ds1102e import (
     DEFAULT_GLOB_PATTERNS,
     RigolDS1102E,
-    discover_ds1102e_device as discover_rigol_ds1102e_device,
+    discover_ds1102e_device,
     list_candidate_devices,
 )
 from rigol_ds1102e_protocol import PROTOCOL, get_command, is_excluded_command, render_command
@@ -79,11 +79,8 @@ class ManagedScopeState:
         self.scope_setup_cache: dict[str, dict[str, Any]] = {}
         self.scope = self.open_discovered_scope(delay=0.2, read_size=4096)
 
-    def discover_ds1102e_device(self) -> str:
-        return discover_rigol_ds1102e_device()
-
     def open_discovered_scope(self, delay: float, read_size: int) -> RigolDS1102E:
-        device = self.discover_ds1102e_device()
+        device = discover_ds1102e_device()
         scope = RigolDS1102E(device=device, query_delay=delay, read_size=read_size)
         scope.open()
         return scope
@@ -94,7 +91,7 @@ class ManagedScopeState:
         return self.scope
 
     def reconnect_scope(self, delay: float, read_size: int) -> RigolDS1102E:
-        device = self.discover_ds1102e_device()
+        device = discover_ds1102e_device()
         self.scope.query_delay = delay
         self.scope.read_size = read_size
         self.scope.reconnect(device)
@@ -839,7 +836,7 @@ def list_ports() -> dict[str, Any]:
     discovered_ds1102e_device: str | None
     discovery_error: str | None = None
     try:
-        discovered_ds1102e_device = _MANAGED_SCOPE.discover_ds1102e_device()
+        discovered_ds1102e_device = discover_ds1102e_device()
     except RuntimeError as exc:
         discovered_ds1102e_device = None
         discovery_error = str(exc)
