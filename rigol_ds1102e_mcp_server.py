@@ -114,21 +114,13 @@ class ManagedScopeState:
         response = self.scope_query_bytes(scpi)
         return response.decode("ascii", "replace").replace("\x00", "").strip()
 
-    def protocol_query(
-        self,
-        key: str,
-        params: dict[str, Any] | None = None,
-    ) -> str:
+    def protocol_query(self, key: str, params: dict[str, Any] | None = None,) -> str:
         scpi = render_command(key, **(params or {}))
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
         return self.scope_query(scpi)
 
-    def protocol_write(
-        self,
-        key: str,
-        params: dict[str, Any] | None = None,
-    ) -> str:
+    def protocol_write(self, key: str, params: dict[str, Any] | None = None,) -> str:
         scpi = render_command(key, **(params or {}))
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
@@ -833,17 +825,13 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 
 
 @mcp.tool()
-def rigol_ds1102e_get_scope_config(
-    channels: list[int] | None = None,
-) -> dict[str, Any]:
+def rigol_ds1102e_get_scope_config(channels: list[int] | None = None,) -> dict[str, Any]:
     """Read the current scope configuration from the scope."""
     return _MANAGED_SCOPE.get_scope_config(normalize_channels(channels))
 
 
 @mcp.tool()
-def rigol_ds1102e_apply_profile(
-    profile: dict[str, Any],
-) -> dict[str, Any]:
+def rigol_ds1102e_apply_profile(profile: dict[str, Any],) -> dict[str, Any]:
     """Apply multiple setup changes in one request."""
     return _MANAGED_SCOPE.apply_profile(normalize_profile(profile))
 
