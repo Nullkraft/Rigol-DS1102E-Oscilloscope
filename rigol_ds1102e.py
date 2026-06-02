@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 
 import argparse
+import glob
 import os
 import time
 
 
+DEFAULT_GLOB_PATTERNS = (
+    "/dev/usbtmc*",
+    "/dev/usbmisc/usbtmc*",
+    "/dev/usb/usbtmc*",
+)
+RIGOL_DS1102E_IDN_PREFIX = "RIGOL TECHNOLOGIES,DS1102E"
+
+
 class RigolDS1102E:
-    def __init__(self, device="/dev/usbtmc0", query_delay=0.2, read_size=4096):
+    def __init__(self, device, query_delay=0.2, read_size=4096):
         self.device = device
         self.query_delay = query_delay
         self.read_size = read_size
@@ -55,9 +64,27 @@ class RigolDS1102E:
         return f"{text}\n".encode("ascii")
 
 
+def list_candidate_devices():
+    devices = []
+    for pattern in DEFAULT_GLOB_PATTERNS:
+        devices.extend(glob.glob(pattern))
+    return sorted(set(devices))
+
+
+def discover_ds1102e_device(query_delay=0.2, read_size=4096):
+    for device in list_candidate_devices():
+        scope = RigolDS1102E(device=device, query_delay=query_delay, read_size=read_size)
+        try:
+            identity = scope.identify()
+        except Exception:
+            continue
+        if identity.startswith(RIGOL_DS1102E_IDN_PREFIX):
+            return device
+    raise RuntimeError("Could not find a DS1102E by probing USBTMC devices with *IDN?.")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Minimal Rigol DS1102E USBTMC helper")
-    parser.add_argument("--device", default="/dev/usbtmc0", help="USBTMC device path")
     parser.add_argument(
         "--delay",
         type=float,
@@ -86,7 +113,8 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    scope = RigolDS1102E(device=args.device, query_delay=args.delay, read_size=args.read_size)
+    device = discover_ds1102e_device(query_delay=args.delay, read_size=args.read_size)
+    scope = RigolDS1102E(device=device, query_delay=args.delay, read_size=args.read_size)
 
     if args.command == "idn":
         print(scope.identify())
