@@ -13,7 +13,6 @@ MCP tools:
 - `rigol_ds1102e_list_protocol_commands()`
 - `rigol_ds1102e_protocol_command(key, params=None, delay=0.2, read_size=4096)`
 - `rigol_ds1102e_snapshot_get(delay=0.2, read_size=4096, channels=None)`
-- `rigol_ds1102e_snapshot_cached()`
 - `rigol_ds1102e_snapshot_refresh(delay=0.2, read_size=4096, channels=None)`
 - `rigol_ds1102e_apply_profile(profile, delay=0.2, read_size=4096, refresh_after=True)`
 - `rigol_ds1102e_scope_setup(channels=None, trigger_mode="EDGE", sweep="SINGLE", points_mode="RAW", run=False, delay=0.2, read_size=4096)`
@@ -25,7 +24,7 @@ For `rigol_ds1102e_protocol_command`, `key` must match a supported command key f
 
 If no DS1102E can be identified at startup, the MCP server exits and tells the technician to try plugging in the USB cable to the scope.
 
-Settings snapshots read identity, channel setup, timebase, trigger, acquire, waveform point mode, and trigger status directly from the scope. `rigol_ds1102e_snapshot_get` returns the cached snapshot when it is fresh and refreshes only when the cache is missing or stale. `rigol_ds1102e_snapshot_cached` never queries the scope. `rigol_ds1102e_snapshot_refresh` always queries the scope and stores a fresh snapshot.
+Settings snapshots read identity, channel setup, timebase, trigger, acquire, waveform point mode, and trigger status directly from the scope. `rigol_ds1102e_snapshot_get` returns the cached snapshot when it is fresh and refreshes only when the cache is missing or stale. `rigol_ds1102e_snapshot_refresh` always queries the scope and stores a fresh snapshot.
 
 `rigol_ds1102e_apply_profile` accepts a profile map with optional `channels`, `timebase`, `trigger`, `acquire`, `waveform`, and `session` sections, applies those settings, and refreshes the cache by default. Measurement protocol commands remain direct/live scope queries.
 
@@ -41,7 +40,6 @@ Example calls:
 - `rigol_ds1102e_identify()`
 - `rigol_ds1102e_protocol_command(key="channel_scale_get", params={"channel": 1})`
 - `rigol_ds1102e_snapshot_get(channels=[1])`
-- `rigol_ds1102e_snapshot_cached()`
 - `rigol_ds1102e_snapshot_refresh(channels=[1, 2])`
 - `rigol_ds1102e_apply_profile(profile={"channels":{"1":{"display":true,"coupling":"DC","scale":0.5}},"timebase":{"scale":0.001},"trigger":{"mode":"EDGE","source":"CHAN1","level":0.0},"acquire":{"type":"NORM"}})`
 

@@ -363,14 +363,6 @@ class ManagedScopeState:
             "snapshot": self.build_setup_snapshot(delay, read_size, channels),
         }
 
-    def snapshot_cached(self) -> dict[str, Any]:
-        device, cached = self.get_cached_snapshot()
-        return {
-            "device": device,
-            "found": cached is not None,
-            "snapshot": cached,
-        }
-
     def snapshot_refresh(
         self,
         delay: float,
@@ -923,12 +915,6 @@ def rigol_ds1102e_snapshot_get(
 ) -> dict[str, Any]:
     """Return the cached setup snapshot, refreshing from the scope if missing or stale."""
     return _MANAGED_SCOPE.snapshot_get(delay, read_size, normalize_channels(channels))
-
-
-@mcp.tool()
-def rigol_ds1102e_snapshot_cached() -> dict[str, Any]:
-    """Return the last stored setup snapshot without querying the scope."""
-    return _MANAGED_SCOPE.snapshot_cached()
 
 
 @mcp.tool()
