@@ -91,60 +91,56 @@ class ManagedScopeState:
         scope.open()
         return scope
 
-    def reconnect_scope(self, scope: RigolDS1102E) -> RigolDS1102E:
+    def reconnect_scope(self) -> RigolDS1102E:
         device = discover_ds1102e_device()
-        self.scope.query_delay = scope.query_delay
-        self.scope.read_size = scope.read_size
         self.scope.reconnect(device)
         return self.scope
 
-    def scope_write(self, scope: RigolDS1102E, scpi: str) -> None:
+    def scope_write(self, scpi: str) -> None:
         try:
-            scope.write(scpi)
+            self.scope.write(scpi)
         except OSError:
-            scope = self.reconnect_scope(scope)
-            scope.write(scpi)
+            self.reconnect_scope()
+            self.scope.write(scpi)
 
-    def scope_query_bytes(self, scope: RigolDS1102E, scpi: str) -> bytes:
+    def scope_query_bytes(self, scpi: str) -> bytes:
         try:
-            return scope.query_bytes(scpi)
+            return self.scope.query_bytes(scpi)
         except OSError:
-            scope = self.reconnect_scope(scope)
-            return scope.query_bytes(scpi)
+            self.reconnect_scope()
+            return self.scope.query_bytes(scpi)
 
-    def scope_query(self, scope: RigolDS1102E, scpi: str) -> str:
-        response = self.scope_query_bytes(scope, scpi)
+    def scope_query(self, scpi: str) -> str:
+        response = self.scope_query_bytes(scpi)
         return response.decode("ascii", "replace").replace("\x00", "").strip()
 
     def protocol_query(
         self,
-        scope: RigolDS1102E,
         key: str,
         params: dict[str, Any] | None = None,
     ) -> str:
         scpi = render_command(key, **(params or {}))
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
-        return self.scope_query(scope, scpi)
+        return self.scope_query(scpi)
 
     def protocol_write(
         self,
-        scope: RigolDS1102E,
         key: str,
         params: dict[str, Any] | None = None,
     ) -> str:
         scpi = render_command(key, **(params or {}))
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
-        self.scope_write(scope, scpi)
+        self.scope_write(scpi)
         return scpi
 
-    def query_waveform_bytes(self, scope: RigolDS1102E, scpi: str) -> bytes:
-        data = self.scope_query_bytes(scope, scpi).rstrip(b"\n")
+    def query_waveform_bytes(self, scpi: str) -> bytes:
+        data = self.scope_query_bytes(scpi).rstrip(b"\n")
         for _ in range(4):
-            if len(data) != 600 or scope.read_size <= 600:
+            if len(data) != 600 or self.scope.read_size <= 600:
                 break
-            reread = self.scope_query_bytes(scope, scpi).rstrip(b"\n")
+            reread = self.scope_query_bytes(scpi).rstrip(b"\n")
             if len(reread) > len(data):
                 data = reread
             elif len(reread) != 600:
@@ -152,19 +148,18 @@ class ManagedScopeState:
                 break
         return data
 
-    def require_stopped_scope(self, scope: RigolDS1102E, attempts: int = 20) -> str:
+    def require_stopped_scope(self, attempts: int = 20) -> str:
         status = ""
         for _ in range(attempts):
-            status = self.protocol_query(scope, "trigger_status").upper()
+            status = self.protocol_query("trigger_status").upper()
             if status == "STOP":
                 return status
             if status == "WAIT":
-                self.protocol_write(scope, "stop")
+                self.protocol_write("stop")
         raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
 
     def capture_waveform_channels(
         self,
-        scope: RigolDS1102E,
         selected_channels: list[int],
         freeze: bool,
         points_mode: str,
@@ -172,36 +167,36 @@ class ManagedScopeState:
         writes: list[dict[str, Any]] = []
 
         if freeze:
-            scpi = self.protocol_write(scope, "stop")
+            scpi = self.protocol_write("stop")
             writes.append({"key": "stop", "params": {}, "scpi": scpi})
-            self.require_stopped_scope(scope)
+            self.require_stopped_scope()
 
         params = {"points_mode": points_mode}
-        scpi = self.protocol_write(scope, "waveform_points_mode_set", params)
+        scpi = self.protocol_write("waveform_points_mode_set", params)
         writes.append({"key": "waveform_points_mode_set", "params": params, "scpi": scpi})
 
         captured_channels: dict[str, bytes] = {}
         for channel in selected_channels:
             scpi = render_command("waveform_data_get", channel=channel)
-            captured_channels[str(channel)] = self.query_waveform_bytes(scope, scpi)
+            captured_channels[str(channel)] = self.query_waveform_bytes(scpi)
 
         return writes, captured_channels
 
     def identify(self) -> dict[str, Any]:
         return {
             "device": self.scope.device,
-            "response": self.scope_query(self.scope, "*IDN?"),
+            "response": self.scope_query("*IDN?"),
         }
 
     def query(self, scpi: str) -> dict[str, Any]:
         return {
             "device": self.scope.device,
             "scpi": scpi,
-            "response": self.scope_query(self.scope, scpi),
+            "response": self.scope_query(scpi),
         }
 
     def write(self, scpi: str) -> dict[str, Any]:
-        self.scope_write(self.scope, scpi)
+        self.scope_write(scpi)
         device = self.scope.device
         return {
             "device": device,
@@ -213,7 +208,7 @@ class ManagedScopeState:
         device = self.scope.device
         normalized_scope_data: dict[str, Any] = {
             "device": device,
-            "identity": self.scope_query(self.scope, "*IDN?"),
+            "identity": self.scope_query("*IDN?"),
             "channels": {},
             "timebase": {},
             "trigger": {},
@@ -227,7 +222,6 @@ class ManagedScopeState:
             channel_settings: dict[str, str] = {}
             for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
                 channel_settings[setting_name] = self.protocol_query(
-                    self.scope,
                     command_key,
                     {"channel": channel},
                 )
@@ -237,51 +231,42 @@ class ManagedScopeState:
 
         for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
             normalized_scope_data["timebase"][setting_name] = self.protocol_query(
-                self.scope,
                 command_key,
             )
 
-        trigger_mode = self.protocol_query(self.scope, "trigger_mode_get")
+        trigger_mode = self.protocol_query("trigger_mode_get")
         normalized_scope_data["trigger"]["mode"] = trigger_mode
         normalized_scope_data["trigger"]["source"] = self.protocol_query(
-            self.scope,
             "trigger_source_get",
             {"mode": trigger_mode},
         )
         normalized_scope_data["trigger"]["level"] = self.protocol_query(
-            self.scope,
             "trigger_level_get",
             {"mode": trigger_mode},
         )
         normalized_scope_data["trigger"]["sweep"] = self.protocol_query(
-            self.scope,
             "trigger_sweep_get",
             {"mode": trigger_mode},
         )
         normalized_scope_data["trigger"]["holdoff"] = self.protocol_query(
-            self.scope,
             "trigger_holdoff_get",
         )
 
         for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
             normalized_scope_data["acquire"][setting_name] = self.protocol_query(
-                self.scope,
                 command_key,
             )
         normalized_scope_data["acquire"]["sampling_rate"] = {}
         for channel in visible_channels:
             normalized_scope_data["acquire"]["sampling_rate"][str(channel)] = self.protocol_query(
-                self.scope,
                 "acquire_sampling_rate_get",
                 {"channel": channel},
             )
 
         normalized_scope_data["waveform"]["points_mode"] = self.protocol_query(
-            self.scope,
             "waveform_points_mode_get",
         )
         normalized_scope_data["session"]["trigger_status"] = self.protocol_query(
-            self.scope,
             "trigger_status",
         )
         return normalized_scope_data
@@ -295,39 +280,32 @@ class ManagedScopeState:
         }
 
     def apply_profile(self, profile: dict[str, Any],) -> dict[str, Any]:
-        if "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict):
-            profile = profile["normalized_scope_data"]
-        scope = self.scope
-        device = scope.device
+        device = self.scope.device
         writes: list[dict[str, Any]] = []
 
         for channel_key, settings in profile.get("channels", {}).items():
             channel = int(channel_key)
             for setting_name, value in settings.items():
-                mapped = PROFILE_CHANNEL_SETTERS.get(setting_name)
-                if mapped is None:
-                    raise ValueError(f"unsupported channel setting: {setting_name}")
+                mapped = PROFILE_CHANNEL_SETTERS[setting_name]
                 command_key, param_name = mapped
                 params = {"channel": channel, param_name: value}
-                scpi = self.protocol_write(scope, command_key, params)
+                scpi = self.protocol_write(command_key, params)
                 writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("timebase", {}).items():
-            mapped = PROFILE_TIMEBASE_SETTERS.get(setting_name)
-            if mapped is None:
-                raise ValueError(f"unsupported timebase setting: {setting_name}")
+            mapped = PROFILE_TIMEBASE_SETTERS[setting_name]
             command_key, param_name = mapped
             params = {param_name: value}
-            scpi = self.protocol_write(scope, command_key, params)
+            scpi = self.protocol_write(command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         trigger_settings = profile.get("trigger", {})
         trigger_mode = trigger_settings.get("mode")
         if trigger_mode is None:
-            trigger_mode = self.protocol_query(scope, "trigger_mode_get")
+            trigger_mode = self.protocol_query("trigger_mode_get")
         if "mode" in trigger_settings:
             params = {"mode": trigger_settings["mode"]}
-            scpi = self.protocol_write(scope, "trigger_mode_set", params)
+            scpi = self.protocol_write("trigger_mode_set", params)
             writes.append({"key": "trigger_mode_set", "params": params, "scpi": scpi})
             trigger_mode = trigger_settings["mode"]
         for setting_name, command_key in (
@@ -337,36 +315,32 @@ class ManagedScopeState:
         ):
             if setting_name in trigger_settings:
                 params = {"mode": trigger_mode, setting_name: trigger_settings[setting_name]}
-                scpi = self.protocol_write(scope, command_key, params)
+                scpi = self.protocol_write(command_key, params)
                 writes.append({"key": command_key, "params": params, "scpi": scpi})
         if "holdoff" in trigger_settings:
             params = {"holdoff": trigger_settings["holdoff"]}
-            scpi = self.protocol_write(scope, "trigger_holdoff_set", params)
+            scpi = self.protocol_write("trigger_holdoff_set", params)
             writes.append({"key": "trigger_holdoff_set", "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("acquire", {}).items():
-            mapped = PROFILE_ACQUIRE_SETTERS.get(setting_name)
-            if mapped is None:
-                if setting_name == "sampling_rate":
-                    continue
-                raise ValueError(f"unsupported acquire setting: {setting_name}")
+            if setting_name == "sampling_rate":
+                continue
+            mapped = PROFILE_ACQUIRE_SETTERS[setting_name]
             command_key, param_name = mapped
             params = {param_name: value}
-            scpi = self.protocol_write(scope, command_key, params)
+            scpi = self.protocol_write(command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         for setting_name, value in profile.get("waveform", {}).items():
-            command_key = PROFILE_WAVEFORM_SETTERS.get(setting_name)
-            if command_key is None:
-                raise ValueError(f"unsupported waveform setting: {setting_name}")
+            command_key = PROFILE_WAVEFORM_SETTERS[setting_name]
             params = {setting_name: value}
-            scpi = self.protocol_write(scope, command_key, params)
+            scpi = self.protocol_write(command_key, params)
             writes.append({"key": command_key, "params": params, "scpi": scpi})
 
         session_settings = profile.get("session", {})
         for setting_name, command_key in (("run", "run"), ("stop", "stop"), ("force_trigger", "force_trigger")):
             if session_settings.get(setting_name):
-                scpi = self.protocol_write(scope, command_key)
+                scpi = self.protocol_write(command_key)
                 writes.append({"key": command_key, "params": {}, "scpi": scpi})
 
         return {
@@ -376,13 +350,12 @@ class ManagedScopeState:
         }
 
     def prepare_to_capture_spi_bus(self, channels: list[int], trigger_mode: str, sweep: str, points_mode: str, run: bool,) -> dict[str, Any]:
-        scope = self.scope
-        device = scope.device
+        device = self.scope.device
         writes: list[dict[str, Any]] = []
 
         for channel in channels:
             params = {"channel": channel, "state": "ON"}
-            scpi = self.protocol_write(scope, "channel_display_set", params)
+            scpi = self.protocol_write("channel_display_set", params)
             writes.append({"key": "channel_display_set", "params": params, "scpi": scpi})
 
         for key, params in (
@@ -390,11 +363,11 @@ class ManagedScopeState:
             ("trigger_sweep_set", {"mode": trigger_mode, "sweep": sweep}),
             ("waveform_points_mode_set", {"points_mode": points_mode}),
         ):
-            scpi = self.protocol_write(scope, key, params)
+            scpi = self.protocol_write(key, params)
             writes.append({"key": key, "params": params, "scpi": scpi})
 
         if run:
-            scpi = self.protocol_write(scope, "run")
+            scpi = self.protocol_write("run")
             writes.append({"key": "run", "params": {}, "scpi": scpi})
 
         return {
@@ -403,18 +376,16 @@ class ManagedScopeState:
             "writes": writes,
         }
 
-    def data_capture(self, channels: list[int] | None, freeze: bool, points_mode: str, encoding: str,) -> dict[str, Any]:
+    def data_capture(self, channels: list[int], freeze: bool, points_mode: str, encoding: str,) -> dict[str, Any]:
         device = self.scope.device
-        selected_channels = normalize_channels(channels)
         writes, raw_channels = self.capture_waveform_channels(
-            self.scope,
-            selected_channels,
+            channels,
             freeze,
             points_mode,
         )
 
         captured_channels: dict[str, Any] = {}
-        for channel in selected_channels:
+        for channel in channels:
             data = raw_channels[str(channel)]
             captured_channels[str(channel)] = {
                 "scpi": render_command("waveform_data_get", channel=channel),
@@ -439,12 +410,8 @@ class ManagedScopeState:
         threshold: int,
         slope_threshold: int,
     ) -> dict[str, Any]:
-        if clock_scope_channel == data_scope_channel:
-            raise ValueError("clock_scope_channel and data_scope_channel must be different")
-
         device = self.scope.device
         writes, raw_channels = self.capture_waveform_channels(
-            self.scope,
             [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
@@ -496,48 +463,18 @@ class ManagedScopeState:
         time_scale: float | None,
         time_scale_margin: float,
     ) -> dict[str, Any]:
-        if clock_scope_channel == data_scope_channel:
-            raise ValueError("clock_scope_channel and data_scope_channel must be different")
-        if not 1 <= threshold <= 20:
-            raise ValueError("threshold must be between 1 and 20")
-        if not 1 <= slope_threshold <= 20:
-            raise ValueError("slope_threshold must be between 1 and 20")
-        if not 0.05 <= low_ratio <= 0.4:
-            raise ValueError("low_ratio must be between 0.05 and 0.4")
-        if not 0.6 <= high_ratio <= 0.95:
-            raise ValueError("high_ratio must be between 0.6 and 0.95")
-        if expected_writes is not None and not 1 <= expected_writes <= 6:
-            raise ValueError("expected_writes must be between 1 and 6")
-        if expected_addresses is not None:
-            if not 1 <= len(expected_addresses) <= 6:
-                raise ValueError("expected_addresses must contain between 1 and 6 addresses")
-            for address in expected_addresses:
-                if not 0 <= int(address) <= 5:
-                    raise ValueError("expected_addresses values must be between 0 and 5")
-            if expected_writes is not None and len(expected_addresses) != expected_writes:
-                raise ValueError("expected_addresses length must match expected_writes")
-            if expected_writes is None:
-                expected_writes = len(expected_addresses)
-        if not 0 <= max_extra_edges <= 16:
-            raise ValueError("max_extra_edges must be between 0 and 16")
-        if time_scale is not None and not 500e-9 <= time_scale <= 20e-6:
-            raise ValueError("time_scale must be between 500e-9 and 20e-6 seconds/div")
-        if not 1.0 <= time_scale_margin <= 2.0:
-            raise ValueError("time_scale_margin must be between 1.0 and 2.0")
-
         device = self.scope.device
         writes: list[dict[str, Any]] = []
         current_time_scale = time_scale
         if current_time_scale is None:
-            response = self.protocol_query(self.scope, "timebase_scale_get")
+            response = self.protocol_query("timebase_scale_get")
             current_time_scale = float(response)
         if time_scale is not None:
             params = {"scale": time_scale}
-            scpi = self.protocol_write(self.scope, "timebase_scale_set", params)
+            scpi = self.protocol_write("timebase_scale_set", params)
             writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
 
         capture_writes, raw_channels = self.capture_waveform_channels(
-            self.scope,
             [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
@@ -615,8 +552,6 @@ class ManagedScopeState:
     def protocol_command(self, key: str, params: dict[str, Any] | None,) -> dict[str, Any]:
         command = get_command(key)
         scpi = render_command(key, **(params or {}))
-        if is_excluded_command(scpi):
-            raise ValueError(f"protocol command is excluded: {key}")
 
         device = self.scope.device
         result: dict[str, Any] = {
@@ -627,22 +562,18 @@ class ManagedScopeState:
             "scpi": scpi,
         }
         if command.kind == "query":
-            result["response"] = self.scope_query(self.scope, scpi)
+            result["response"] = self.scope_query(scpi)
             return result
 
-        self.scope_write(self.scope, scpi)
+        self.scope_write(scpi)
         result["status"] = "ok"
         return result
 
     def scope_io(self, delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
         scope = self.scope
         if delay is not None:
-            if delay < 0:
-                raise ValueError("delay must be non-negative")
             scope.query_delay = delay
         if read_size is not None:
-            if read_size < 1:
-                raise ValueError("read_size must be at least 1")
             scope.read_size = read_size
         return {
             "device": scope.device,
@@ -651,6 +582,15 @@ class ManagedScopeState:
         }
 
 _MANAGED_SCOPE = ManagedScopeState()
+
+VALID_SCOPE_CHANNELS = (1, 2)
+VALID_WAVEFORM_ENCODINGS = ("list", "base64", "hex", "none")
+VALID_SPI_SOURCE_NAMES = ("chan_1", "chan_2")
+VALID_PROFILE_TOP_LEVEL_KEYS = ("device", "identity", "channels", "timebase", "trigger", "acquire", "waveform", "session")
+VALID_PROFILE_TRIGGER_KEYS = ("mode", "source", "level", "sweep", "holdoff")
+VALID_PROFILE_SESSION_KEYS = ("run", "stop", "force_trigger", "trigger_status")
+READ_ONLY_PROFILE_ACQUIRE_KEYS = ("sampling_rate",)
+
 
 def is_supported_protocol_command(key: str) -> bool:
     command = PROTOCOL[key]
@@ -678,28 +618,78 @@ def summarize_waveform_data(data: bytes) -> dict[str, Any]:
         "first_16_hex": data[:16].hex(" "),
     }
 
+
+def validate_integer_range(name: str, value: int, minimum: int, maximum: int,) -> None:
+    if not minimum <= int(value) <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+
+
+def validate_float_range(name: str, value: float, minimum: float, maximum: float, suffix: str = "",) -> None:
+    numeric = float(value)
+    if not minimum <= numeric <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}{suffix}")
+
+
+def validate_choice(name: str, value: str, allowed: tuple[str, ...],) -> None:
+    if value not in allowed:
+        allowed_text = ", ".join(allowed)
+        if len(allowed) == 2:
+            allowed_text = f"{allowed[0]!r} or {allowed[1]!r}"
+        raise ValueError(f"{name} must be {allowed_text}")
+
+
 def normalize_channels(channels: list[int] | None) -> list[int]:
     selected = channels or [1, 2]
     normalized = []
     for channel in selected:
         value = int(channel)
-        if value not in (1, 2):
+        if value not in VALID_SCOPE_CHANNELS:
             raise ValueError(f"channel must be 1 or 2, got {value}")
         if value not in normalized:
             normalized.append(value)
     return normalized
 
 
-def validate_profile_channels(profile: dict[str, Any],) -> None:
+def normalize_profile(profile: dict[str, Any],) -> dict[str, Any]:
     candidate = profile
     if "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict):
         candidate = profile["normalized_scope_data"]
+    for section_name in candidate:
+        if section_name not in VALID_PROFILE_TOP_LEVEL_KEYS:
+            raise ValueError(f"unsupported profile section: {section_name}")
     normalize_channels(list(candidate.get("channels", {}).keys()))
+    for settings in candidate.get("channels", {}).values():
+        for setting_name in settings:
+            if setting_name not in PROFILE_CHANNEL_SETTERS:
+                raise ValueError(f"unsupported channel setting: {setting_name}")
+    for setting_name in candidate.get("timebase", {}):
+        if setting_name not in PROFILE_TIMEBASE_SETTERS:
+            raise ValueError(f"unsupported timebase setting: {setting_name}")
+    for setting_name in candidate.get("trigger", {}):
+        if setting_name not in VALID_PROFILE_TRIGGER_KEYS:
+            raise ValueError(f"unsupported trigger setting: {setting_name}")
+    for setting_name in candidate.get("acquire", {}):
+        if setting_name in READ_ONLY_PROFILE_ACQUIRE_KEYS:
+            continue
+        if setting_name not in PROFILE_ACQUIRE_SETTERS:
+            raise ValueError(f"unsupported acquire setting: {setting_name}")
+    for setting_name in candidate.get("waveform", {}):
+        if setting_name not in PROFILE_WAVEFORM_SETTERS:
+            raise ValueError(f"unsupported waveform setting: {setting_name}")
+    for setting_name in candidate.get("session", {}):
+        if setting_name not in VALID_PROFILE_SESSION_KEYS:
+            raise ValueError(f"unsupported session setting: {setting_name}")
+    return candidate
+
+
+def validate_waveform_encoding(encoding: str,) -> None:
+    if encoding not in VALID_WAVEFORM_ENCODINGS:
+        raise ValueError("encoding must be one of: list, base64, hex, none")
 
 
 def normalize_scope_channel(channel: int, name: str) -> int:
     value = int(channel)
-    if value not in (1, 2):
+    if value not in VALID_SCOPE_CHANNELS:
         raise ValueError(f"{name} must be 1 or 2, got {value}")
     return value
 
@@ -716,10 +706,8 @@ def resolve_spi_sources(
     }
     resolved_clock_source = "chan_1" if clock_source is None else str(clock_source)
     resolved_data_source = "chan_2" if data_source is None else str(data_source)
-    if resolved_clock_source not in capture_map:
-        raise ValueError("clock_source must be 'chan_1' or 'chan_2'")
-    if resolved_data_source not in capture_map:
-        raise ValueError("data_source must be 'chan_1' or 'chan_2'")
+    validate_choice("clock_source", resolved_clock_source, VALID_SPI_SOURCE_NAMES)
+    validate_choice("data_source", resolved_data_source, VALID_SPI_SOURCE_NAMES)
     resolved_clock = capture_map[resolved_clock_source]
     resolved_data = capture_map[resolved_data_source]
     if resolved_clock == resolved_data:
@@ -730,6 +718,58 @@ def resolve_spi_sources(
         "clock_source": resolved_clock_source,
         "data_source": resolved_data_source,
     }
+
+
+def validate_protocol_command_request(key: str,) -> None:
+    if key not in PROTOCOL:
+        raise ValueError(f"unsupported protocol command: {key}")
+    if not is_supported_protocol_command(key):
+        raise ValueError(f"protocol command is excluded: {key}")
+
+
+def validate_scope_io_request(delay: float | None, read_size: int | None,) -> None:
+    if delay is not None and delay < 0:
+        raise ValueError("delay must be non-negative")
+    if read_size is not None and read_size < 1:
+        raise ValueError("read_size must be at least 1")
+
+
+def validate_spi_sample_indexes_request(threshold: int, slope_threshold: int,) -> None:
+    validate_integer_range("threshold", threshold, 1, 20)
+    validate_integer_range("slope_threshold", slope_threshold, 1, 20)
+
+
+def validate_spi_decode_request(
+    threshold: int,
+    slope_threshold: int,
+    low_ratio: float,
+    high_ratio: float,
+    expected_writes: int | None,
+    expected_addresses: list[int] | None,
+    max_extra_edges: int,
+    time_scale: float | None,
+    time_scale_margin: float,
+) -> list[int] | None:
+    validate_spi_sample_indexes_request(threshold, slope_threshold)
+    validate_float_range("low_ratio", low_ratio, 0.05, 0.4)
+    validate_float_range("high_ratio", high_ratio, 0.6, 0.95)
+    if expected_writes is not None:
+        validate_integer_range("expected_writes", expected_writes, 1, 6)
+    normalized_addresses = None
+    if expected_addresses is not None:
+        normalized_addresses = [int(address) for address in expected_addresses]
+        if not 1 <= len(normalized_addresses) <= 6:
+            raise ValueError("expected_addresses must contain between 1 and 6 addresses")
+        for address in normalized_addresses:
+            if not 0 <= address <= 5:
+                raise ValueError("expected_addresses values must be between 0 and 5")
+        if expected_writes is not None and len(normalized_addresses) != expected_writes:
+            raise ValueError("expected_addresses length must match expected_writes")
+    validate_integer_range("max_extra_edges", max_extra_edges, 0, 16)
+    if time_scale is not None:
+        validate_float_range("time_scale", time_scale, 500e-9, 20e-6, " seconds/div")
+    validate_float_range("time_scale_margin", time_scale_margin, 1.0, 2.0)
+    return normalized_addresses
 
 
 @mcp.tool()
@@ -805,8 +845,7 @@ def rigol_ds1102e_apply_profile(
     profile: dict[str, Any],
 ) -> dict[str, Any]:
     """Apply multiple setup changes in one request."""
-    validate_profile_channels(profile)
-    return _MANAGED_SCOPE.apply_profile(profile)
+    return _MANAGED_SCOPE.apply_profile(normalize_profile(profile))
 
 
 @mcp.tool()
@@ -835,7 +874,13 @@ def rigol_ds1102e_data_capture(
     encoding: str = "list",
 ) -> dict[str, Any]:
     """Read currently displayed waveform bytes from selected channels."""
-    return _MANAGED_SCOPE.data_capture(channels, freeze, points_mode, encoding)
+    validate_waveform_encoding(encoding)
+    return _MANAGED_SCOPE.data_capture(
+        normalize_channels(channels),
+        freeze,
+        points_mode,
+        encoding,
+    )
 
 
 @mcp.tool()
@@ -856,6 +901,7 @@ def rigol_ds1102e_spi_sample_indexes(
         clock_source,
         data_source,
     )
+    validate_spi_sample_indexes_request(threshold, slope_threshold)
     result = _MANAGED_SCOPE.spi_sample_indexes(
         clock_scope_channel,
         data_scope_channel,
@@ -894,6 +940,17 @@ def rigol_ds1102e_spi_decode(
         clock_source,
         data_source,
     )
+    normalized_addresses = validate_spi_decode_request(
+        threshold,
+        slope_threshold,
+        low_ratio,
+        high_ratio,
+        expected_writes,
+        expected_addresses,
+        max_extra_edges,
+        time_scale,
+        time_scale_margin,
+    )
     result = _MANAGED_SCOPE.spi_decode(
         clock_scope_channel,
         data_scope_channel,
@@ -904,7 +961,7 @@ def rigol_ds1102e_spi_decode(
         low_ratio,
         high_ratio,
         expected_writes,
-        expected_addresses,
+        normalized_addresses,
         window_scan,
         max_extra_edges,
         time_scale,
@@ -920,12 +977,14 @@ def rigol_ds1102e_protocol_command(
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a supported protocol command by key using the registry metadata."""
+    validate_protocol_command_request(key)
     return _MANAGED_SCOPE.protocol_command(key, params)
 
 
 @mcp.tool()
 def rigol_ds1102e_scope_io(delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
     """Get or update the managed scope query delay and read size."""
+    validate_scope_io_request(delay, read_size)
     return _MANAGED_SCOPE.scope_io(delay, read_size)
 
 
