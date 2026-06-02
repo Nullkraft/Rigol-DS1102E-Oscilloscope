@@ -7,19 +7,19 @@ Canonical scope selection is now done by probing every plausible `usbtmc` device
 MCP tools:
 
 - `list_ports()`
-- `rigol_ds1102e_identify(device="/dev/usbtmc0", delay=0.2, read_size=4096)`
-- `rigol_ds1102e_query(scpi, device="/dev/usbtmc0", delay=0.2, read_size=4096)`
-- `rigol_ds1102e_write(scpi, device="/dev/usbtmc0")`
+- `rigol_ds1102e_identify(delay=0.2, read_size=4096)`
+- `rigol_ds1102e_query(scpi, delay=0.2, read_size=4096)`
+- `rigol_ds1102e_write(scpi)`
 - `rigol_ds1102e_list_protocol_commands()`
-- `rigol_ds1102e_protocol_command(key, params=None, device="/dev/usbtmc0", delay=0.2, read_size=4096)`
-- `rigol_ds1102e_snapshot_get(device="/dev/usbtmc0", delay=0.2, read_size=4096, channels=None)`
-- `rigol_ds1102e_snapshot_cached(device="/dev/usbtmc0")`
-- `rigol_ds1102e_snapshot_refresh(device="/dev/usbtmc0", delay=0.2, read_size=4096, channels=None)`
-- `rigol_ds1102e_apply_profile(profile, device="/dev/usbtmc0", delay=0.2, read_size=4096, refresh_after=True)`
-- `rigol_ds1102e_scope_setup(device="/dev/usbtmc0", channels=None, trigger_mode="EDGE", sweep="SINGLE", points_mode="RAW", run=False, delay=0.2, read_size=4096)`
-- `rigol_ds1102e_data_capture(device="/dev/usbtmc0", channels=None, freeze=True, points_mode="RAW", encoding="list", delay=0.2, read_size=1200000)`
-- `rigol_ds1102e_spi_sample_indexes(device="/dev/usbtmc0", clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, delay=0.2, read_size=1200000)`
-- `rigol_ds1102e_spi_decode(device="/dev/usbtmc0", clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, time_scale_margin=1.5, delay=0.2, read_size=1200000)`
+- `rigol_ds1102e_protocol_command(key, params=None, delay=0.2, read_size=4096)`
+- `rigol_ds1102e_snapshot_get(delay=0.2, read_size=4096, channels=None)`
+- `rigol_ds1102e_snapshot_cached()`
+- `rigol_ds1102e_snapshot_refresh(delay=0.2, read_size=4096, channels=None)`
+- `rigol_ds1102e_apply_profile(profile, delay=0.2, read_size=4096, refresh_after=True)`
+- `rigol_ds1102e_scope_setup(channels=None, trigger_mode="EDGE", sweep="SINGLE", points_mode="RAW", run=False, delay=0.2, read_size=4096)`
+- `rigol_ds1102e_data_capture(channels=None, freeze=True, points_mode="RAW", encoding="list", delay=0.2, read_size=1200000)`
+- `rigol_ds1102e_spi_sample_indexes(clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, delay=0.2, read_size=1200000)`
+- `rigol_ds1102e_spi_decode(clock_channel=1, data_channel=2, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, time_scale_margin=1.5, delay=0.2, read_size=1200000)`
 
 For `rigol_ds1102e_protocol_command`, `key` must match a supported command key from `rigol_ds1102e_list_protocol_commands()`. `params` is a JSON object whose fields match that key's `args`. Examples: `{"channel": 1}` for `channel_scale_get`, `{"channel": 1, "scale": 0.5}` for `channel_scale_set`.
 
@@ -38,12 +38,12 @@ Settings snapshots read identity, channel setup, timebase, trigger, acquire, wav
 Example calls:
 
 - `list_ports()`
-- `rigol_ds1102e_identify(device="/dev/usbtmc0")`
+- `rigol_ds1102e_identify()`
 - `rigol_ds1102e_protocol_command(key="channel_scale_get", params={"channel": 1})`
-- `rigol_ds1102e_snapshot_get(device="/dev/usbtmc0", channels=[1])`
-- `rigol_ds1102e_snapshot_cached(device="/dev/usbtmc0")`
-- `rigol_ds1102e_snapshot_refresh(device="/dev/usbtmc0", channels=[1, 2])`
-- `rigol_ds1102e_apply_profile(profile={"channels":{"1":{"display":true,"coupling":"DC","scale":0.5}},"timebase":{"scale":0.001},"trigger":{"mode":"EDGE","source":"CHAN1","level":0.0},"acquire":{"type":"NORM"}}, device="/dev/usbtmc0")`
+- `rigol_ds1102e_snapshot_get(channels=[1])`
+- `rigol_ds1102e_snapshot_cached()`
+- `rigol_ds1102e_snapshot_refresh(channels=[1, 2])`
+- `rigol_ds1102e_apply_profile(profile={"channels":{"1":{"display":true,"coupling":"DC","scale":0.5}},"timebase":{"scale":0.001},"trigger":{"mode":"EDGE","source":"CHAN1","level":0.0},"acquire":{"type":"NORM"}})`
 
 To test the Rigol MCP through a real stdio client in the local environment, run `./bin/mcp dev rigol_ds1102e_mcp_server.py` from the repo root.
 
@@ -56,5 +56,5 @@ To test the Rigol MCP through a real stdio client in the local environment, run 
 
 Example Inspector calls for `rigol_ds1102e_protocol_command`:
 
-- `{"key":"trigger_status","device":"/dev/usbtmc0"}`
-- `{"key":"channel_scale_get","params":{"channel":1},"device":"/dev/usbtmc0"}`
+- `{"key":"trigger_status"}`
+- `{"key":"channel_scale_get","params":{"channel":1}}`
