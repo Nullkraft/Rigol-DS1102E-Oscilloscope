@@ -7,7 +7,6 @@
 # ///
 
 import base64
-from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -80,7 +79,6 @@ DEFAULT_SCOPE_READ_SIZE = 1200000
 
 class ManagedScopeState:
     def __init__(self) -> None:
-        self.scope_setup_cache: dict[str, dict[str, Any]] = {}
         self.scope = self.open_discovered_scope()
 
     def open_discovered_scope(self) -> RigolDS1102E:
@@ -205,16 +203,11 @@ class ManagedScopeState:
     def write(self, scpi: str) -> dict[str, Any]:
         self.scope_write(self.scope, scpi)
         device = self.scope.device
-        self.mark_cache_stale(device, f"raw write: {scpi}")
         return {
             "device": device,
             "scpi": scpi,
             "status": "ok",
         }
-
-    def get_cached_snapshot(self) -> tuple[str, dict[str, Any] | None]:
-        device = self.scope.device
-        return device, self.scope_setup_cache.get(device)
 
     def build_setup_snapshot(self, channels: list[int],) -> dict[str, Any]:
         device = self.scope.device
@@ -227,11 +220,6 @@ class ManagedScopeState:
             "acquire": {},
             "waveform": {},
             "session": {},
-            "cache": {
-                "state": "fresh",
-                "reason": "snapshot_refresh",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
         }
 
         visible_channels: list[int] = []
@@ -296,24 +284,9 @@ class ManagedScopeState:
             self.scope,
             "trigger_status",
         )
-        self.scope_setup_cache[device] = snapshot
         return snapshot
 
     def snapshot_get(self, channels: list[int],) -> dict[str, Any]:
-        device, cached = self.get_cached_snapshot()
-        if cached is not None and cached.get("cache", {}).get("state") == "fresh":
-            return {
-                "device": device,
-                "source": "cache",
-                "snapshot": cached,
-            }
-        return {
-            "device": device,
-            "source": "scope",
-            "snapshot": self.build_setup_snapshot(channels),
-        }
-
-    def snapshot_refresh(self, channels: list[int],) -> dict[str, Any]:
         device = self.scope.device
         return {
             "device": device,
@@ -353,8 +326,7 @@ class ManagedScopeState:
         trigger_settings = profile.get("trigger", {})
         trigger_mode = trigger_settings.get("mode")
         if trigger_mode is None:
-            _, cached = self.get_cached_snapshot()
-            trigger_mode = (cached or {}).get("trigger", {}).get("mode", "EDGE")
+            trigger_mode = self.protocol_query(scope, "trigger_mode_get")
         if "mode" in trigger_settings:
             params = {"mode": trigger_settings["mode"]}
             scpi = self.protocol_write(scope, "trigger_mode_set", params)
@@ -401,17 +373,13 @@ class ManagedScopeState:
 
         if refresh_after:
             snapshot = self.build_setup_snapshot([1, 2])
-            cache_state = "fresh"
         else:
-            self.mark_cache_stale(device, "profile applied without refresh")
-            _, snapshot = self.get_cached_snapshot()
-            cache_state = "stale"
+            snapshot = None
 
         return {
             "device": device,
             "status": "ok",
             "writes": writes,
-            "cache_state": cache_state,
             "snapshot": snapshot,
         }
 
@@ -437,12 +405,10 @@ class ManagedScopeState:
             scpi = self.protocol_write(scope, "run")
             writes.append({"key": "run", "params": {}, "scpi": scpi})
 
-        self.mark_cache_stale(device, "scope setup applied")
         return {
             "device": device,
             "status": "ok",
             "writes": writes,
-            "cache_state": "stale",
         }
 
     def data_capture(self, channels: list[int] | None, freeze: bool, points_mode: str, encoding: str,) -> dict[str, Any]:
@@ -465,13 +431,11 @@ class ManagedScopeState:
                 "data": encode_waveform_data(data, encoding),
             }
 
-        self.mark_cache_stale(device, "waveform data captured")
         return {
             "device": device,
             "status": "ok",
             "writes": writes,
             "channels": captured_channels,
-            "cache_state": "stale",
         }
 
     def spi_sample_indexes(
@@ -502,7 +466,6 @@ class ManagedScopeState:
             slope_threshold=slope_threshold,
         )
 
-        self.mark_cache_stale(device, "SPI sample indexes analyzed")
         return {
             "device": device,
             "status": "ok",
@@ -522,7 +485,6 @@ class ManagedScopeState:
                 "minimum": min(data_samples) if data_samples else None,
                 "maximum": max(data_samples) if data_samples else None,
             },
-            "cache_state": "stale",
         }
 
     def spi_decode(
@@ -627,7 +589,6 @@ class ManagedScopeState:
             validate_expected_addresses(decoded, expected_addresses)
             selected_indexes = sample_indexes
 
-        self.mark_cache_stale(device, "SPI data decoded")
         return {
             "device": device,
             "status": "ok",
@@ -657,7 +618,6 @@ class ManagedScopeState:
                 "maximum": max(data_samples) if data_samples else None,
             },
             "decoded": decoded,
-            "cache_state": "stale",
         }
 
     def protocol_command(self, key: str, params: dict[str, Any] | None,) -> dict[str, Any]:
@@ -680,9 +640,6 @@ class ManagedScopeState:
 
         self.scope_write(self.scope, scpi)
         result["status"] = "ok"
-        if command.changes_scope_state:
-            self.mark_cache_stale(device, f"protocol write: {command.key}")
-            result["cache_state"] = "stale"
         return result
 
     def scope_io(self, delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
@@ -700,16 +657,6 @@ class ManagedScopeState:
             "delay": scope.query_delay,
             "read_size": scope.read_size,
         }
-
-    def mark_cache_stale(self, device: str, reason: str) -> None:
-        cached = self.scope_setup_cache.get(device)
-        if cached is not None:
-            cached["cache"] = {
-                "state": "stale",
-                "reason": reason,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-
 
 _MANAGED_SCOPE = ManagedScopeState()
 
@@ -850,16 +797,8 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 def rigol_ds1102e_snapshot_get(
     channels: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Return the cached setup snapshot, refreshing from the scope if missing or stale."""
+    """Read a full setup snapshot from the scope."""
     return _MANAGED_SCOPE.snapshot_get(normalize_channels(channels))
-
-
-@mcp.tool()
-def rigol_ds1102e_snapshot_refresh(
-    channels: list[int] | None = None,
-) -> dict[str, Any]:
-    """Read a full setup snapshot from the scope and store it in the server cache."""
-    return _MANAGED_SCOPE.snapshot_refresh(normalize_channels(channels))
 
 
 @mcp.tool()
@@ -867,7 +806,7 @@ def rigol_ds1102e_apply_profile(
     profile: dict[str, Any],
     refresh_after: bool = True,
 ) -> dict[str, Any]:
-    """Apply multiple setup changes in one request and refresh the setup cache."""
+    """Apply multiple setup changes in one request and optionally read a setup snapshot afterward."""
     return _MANAGED_SCOPE.apply_profile(profile, refresh_after)
 
 
