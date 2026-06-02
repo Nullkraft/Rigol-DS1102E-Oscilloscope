@@ -341,12 +341,7 @@ class ManagedScopeState:
         self.scope_setup_cache[device] = snapshot
         return snapshot
 
-    def snapshot_get(
-        self,
-        delay: float,
-        read_size: int,
-        channels: list[int],
-    ) -> dict[str, Any]:
+    def snapshot_get(self, delay: float, read_size: int, channels: list[int],) -> dict[str, Any]:
         device, cached = self.get_cached_snapshot()
         if cached is not None and cached.get("cache", {}).get("state") == "fresh":
             return {
@@ -849,28 +844,19 @@ def list_ports() -> dict[str, Any]:
 
 
 @mcp.tool()
-def rigol_ds1102e_identify(
-    delay: float = 0.2,
-    read_size: int = 4096,
-) -> dict[str, Any]:
+def rigol_ds1102e_identify(delay: float = 0.2, read_size: int = 4096,) -> dict[str, Any]:
     """Query *IDN? from the scope."""
     return _MANAGED_SCOPE.identify(delay, read_size)
 
 
 @mcp.tool()
-def rigol_ds1102e_query(
-    scpi: str,
-    delay: float = 0.2,
-    read_size: int = 4096,
-) -> dict[str, Any]:
+def rigol_ds1102e_query(scpi: str, delay: float = 0.2, read_size: int = 4096,) -> dict[str, Any]:
     """Send a SCPI query and return the response."""
     return _MANAGED_SCOPE.query(scpi, delay, read_size)
 
 
 @mcp.tool()
-def rigol_ds1102e_write(
-    scpi: str,
-) -> dict[str, Any]:
+def rigol_ds1102e_write(scpi: str,) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
     return _MANAGED_SCOPE.write(scpi)
 

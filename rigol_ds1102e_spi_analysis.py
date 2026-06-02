@@ -204,11 +204,7 @@ def decode_spi_data_words_windowed(
     return decoded
 
 
-def quantize_time_scale(
-    value: float,
-    minimum: float = 500e-9,
-    maximum: float = 20e-6,
-) -> float:
+def quantize_time_scale(value: float, minimum: float = 500e-9, maximum: float = 20e-6,) -> float:
     if value <= minimum:
         return minimum
     if value >= maximum:
