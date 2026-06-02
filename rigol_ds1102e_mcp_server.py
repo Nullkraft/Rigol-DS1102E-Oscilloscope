@@ -93,9 +93,6 @@ class ManagedScopeState:
         scope.open()
         return scope
 
-    def current_scope(self) -> RigolDS1102E:
-        return self.scope
-
     def reconnect_scope(self, scope: RigolDS1102E) -> RigolDS1102E:
         device = discover_ds1102e_device()
         self.scope.query_delay = scope.query_delay
@@ -193,24 +190,21 @@ class ManagedScopeState:
         return writes, captured_channels
 
     def identify(self) -> dict[str, Any]:
-        scope = self.current_scope()
         return {
-            "device": scope.device,
-            "response": self.scope_query(scope, "*IDN?"),
+            "device": self.scope.device,
+            "response": self.scope_query(self.scope, "*IDN?"),
         }
 
     def query(self, scpi: str) -> dict[str, Any]:
-        scope = self.current_scope()
         return {
-            "device": scope.device,
+            "device": self.scope.device,
             "scpi": scpi,
-            "response": self.scope_query(scope, scpi),
+            "response": self.scope_query(self.scope, scpi),
         }
 
     def write(self, scpi: str) -> dict[str, Any]:
-        scope = self.current_scope()
-        self.scope_write(scope, scpi)
-        device = scope.device
+        self.scope_write(self.scope, scpi)
+        device = self.scope.device
         self.mark_cache_stale(device, f"raw write: {scpi}")
         return {
             "device": device,
@@ -223,11 +217,10 @@ class ManagedScopeState:
         return device, self.scope_setup_cache.get(device)
 
     def build_setup_snapshot(self, channels: list[int],) -> dict[str, Any]:
-        scope = self.current_scope()
-        device = scope.device
+        device = self.scope.device
         snapshot: dict[str, Any] = {
             "device": device,
-            "identity": self.scope_query(scope, "*IDN?"),
+            "identity": self.scope_query(self.scope, "*IDN?"),
             "channels": {},
             "timebase": {},
             "trigger": {},
@@ -246,7 +239,7 @@ class ManagedScopeState:
             channel_settings: dict[str, str] = {}
             for setting_name, command_key in SNAPSHOT_CHANNEL_KEYS:
                 channel_settings[setting_name] = self.protocol_query(
-                    scope,
+                    self.scope,
                     command_key,
                     {"channel": channel},
                 )
@@ -256,51 +249,51 @@ class ManagedScopeState:
 
         for setting_name, command_key in SNAPSHOT_TIMEBASE_KEYS:
             snapshot["timebase"][setting_name] = self.protocol_query(
-                scope,
+                self.scope,
                 command_key,
             )
 
-        trigger_mode = self.protocol_query(scope, "trigger_mode_get")
+        trigger_mode = self.protocol_query(self.scope, "trigger_mode_get")
         snapshot["trigger"]["mode"] = trigger_mode
         snapshot["trigger"]["source"] = self.protocol_query(
-            scope,
+            self.scope,
             "trigger_source_get",
             {"mode": trigger_mode},
         )
         snapshot["trigger"]["level"] = self.protocol_query(
-            scope,
+            self.scope,
             "trigger_level_get",
             {"mode": trigger_mode},
         )
         snapshot["trigger"]["sweep"] = self.protocol_query(
-            scope,
+            self.scope,
             "trigger_sweep_get",
             {"mode": trigger_mode},
         )
         snapshot["trigger"]["holdoff"] = self.protocol_query(
-            scope,
+            self.scope,
             "trigger_holdoff_get",
         )
 
         for setting_name, command_key in SNAPSHOT_ACQUIRE_KEYS:
             snapshot["acquire"][setting_name] = self.protocol_query(
-                scope,
+                self.scope,
                 command_key,
             )
         snapshot["acquire"]["sampling_rate"] = {}
         for channel in visible_channels:
             snapshot["acquire"]["sampling_rate"][str(channel)] = self.protocol_query(
-                scope,
+                self.scope,
                 "acquire_sampling_rate_get",
                 {"channel": channel},
             )
 
         snapshot["waveform"]["points_mode"] = self.protocol_query(
-            scope,
+            self.scope,
             "waveform_points_mode_get",
         )
         snapshot["session"]["trigger_status"] = self.protocol_query(
-            scope,
+            self.scope,
             "trigger_status",
         )
         self.scope_setup_cache[device] = snapshot
@@ -331,7 +324,7 @@ class ManagedScopeState:
     def apply_profile(self, profile: dict[str, Any], refresh_after: bool,) -> dict[str, Any]:
         if "snapshot" in profile and isinstance(profile["snapshot"], dict):
             profile = profile["snapshot"]
-        scope = self.current_scope()
+        scope = self.scope
         device = scope.device
         writes: list[dict[str, Any]] = []
 
@@ -423,7 +416,7 @@ class ManagedScopeState:
         }
 
     def scope_setup(self, channels: list[int], trigger_mode: str, sweep: str, points_mode: str, run: bool,) -> dict[str, Any]:
-        scope = self.current_scope()
+        scope = self.scope
         device = scope.device
         writes: list[dict[str, Any]] = []
 
@@ -453,11 +446,10 @@ class ManagedScopeState:
         }
 
     def data_capture(self, channels: list[int] | None, freeze: bool, points_mode: str, encoding: str,) -> dict[str, Any]:
-        scope = self.current_scope()
-        device = scope.device
+        device = self.scope.device
         selected_channels = normalize_channels(channels)
         writes, raw_channels = self.capture_waveform_channels(
-            scope,
+            self.scope,
             selected_channels,
             freeze,
             points_mode,
@@ -494,10 +486,9 @@ class ManagedScopeState:
         if clock_scope_channel == data_scope_channel:
             raise ValueError("clock_scope_channel and data_scope_channel must be different")
 
-        scope = self.current_scope()
-        device = scope.device
+        device = self.scope.device
         writes, raw_channels = self.capture_waveform_channels(
-            scope,
+            self.scope,
             [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
@@ -580,20 +571,19 @@ class ManagedScopeState:
         if not 1.0 <= time_scale_margin <= 2.0:
             raise ValueError("time_scale_margin must be between 1.0 and 2.0")
 
-        scope = self.current_scope()
-        device = scope.device
+        device = self.scope.device
         writes: list[dict[str, Any]] = []
         current_time_scale = time_scale
         if current_time_scale is None:
-            response = self.protocol_query(scope, "timebase_scale_get")
+            response = self.protocol_query(self.scope, "timebase_scale_get")
             current_time_scale = float(response)
         if time_scale is not None:
             params = {"scale": time_scale}
-            scpi = self.protocol_write(scope, "timebase_scale_set", params)
+            scpi = self.protocol_write(self.scope, "timebase_scale_set", params)
             writes.append({"key": "timebase_scale_set", "params": params, "scpi": scpi})
 
         capture_writes, raw_channels = self.capture_waveform_channels(
-            scope,
+            self.scope,
             [clock_scope_channel, data_scope_channel],
             freeze,
             points_mode,
@@ -676,8 +666,7 @@ class ManagedScopeState:
         if is_excluded_command(scpi):
             raise ValueError(f"protocol command is excluded: {key}")
 
-        scope = self.current_scope()
-        device = scope.device
+        device = self.scope.device
         result: dict[str, Any] = {
             "device": device,
             "key": command.key,
@@ -686,10 +675,10 @@ class ManagedScopeState:
             "scpi": scpi,
         }
         if command.kind == "query":
-            result["response"] = self.scope_query(scope, scpi)
+            result["response"] = self.scope_query(self.scope, scpi)
             return result
 
-        self.scope_write(scope, scpi)
+        self.scope_write(self.scope, scpi)
         result["status"] = "ok"
         if command.changes_scope_state:
             self.mark_cache_stale(device, f"protocol write: {command.key}")
@@ -697,7 +686,7 @@ class ManagedScopeState:
         return result
 
     def scope_io(self, delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
-        scope = self.current_scope()
+        scope = self.scope
         if delay is not None:
             if delay < 0:
                 raise ValueError("delay must be non-negative")
