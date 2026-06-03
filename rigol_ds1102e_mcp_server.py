@@ -406,7 +406,7 @@ class ManagedScopeState:
 
         writes: list[dict[str, Any]] = []
         with self.scope._io_lock:
-            fd = self.scope.open()
+            fd = self.scope.open()      # Creates or returns already open port
             for scpi in setup_commands:
                 os.write(fd, RigolDS1102E._normalize_command(scpi))
                 time.sleep(delay)
