@@ -405,11 +405,12 @@ class ManagedScopeState:
         )
 
         writes: list[dict[str, Any]] = []
-        fd = self.scope.open()
-        for scpi in setup_commands:
-            os.write(fd, RigolDS1102E._normalize_command(scpi))
-            time.sleep(delay)
-            writes.append({"scpi": scpi, "status": "ok"})
+        with self.scope._io_lock:
+            fd = self.scope.open()
+            for scpi in setup_commands:
+                os.write(fd, RigolDS1102E._normalize_command(scpi))
+                time.sleep(delay)
+                writes.append({"scpi": scpi, "status": "ok"})
 
         result: dict[str, Any] = {
             "device": device,
@@ -930,7 +931,7 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
 
 
 @mcp.tool()
-def scope_setup_for_spi_bus_analysis(
+def rigol_ds1102e_setup_for_spi_bus_analysis(
     clock_channel: int = DEFAULT_SPI_CLOCK_CHANNEL,
     data_channel: int = DEFAULT_SPI_DATA_CHANNEL,
     delay: float = DEFAULT_SPI_SETUP_DELAY,
