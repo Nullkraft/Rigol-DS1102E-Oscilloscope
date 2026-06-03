@@ -95,3 +95,27 @@ Scope setup tool delay tuning - 2026-06-03
   - `0.12 s`: passed.
   - `0.15 s`: passed.
 - Chosen default delay: `0.15 s`, giving a small safety buffer over the observed `0.12 s` passing threshold.
+
+Grouped Rigol setup MCP tool - 2026-06-03
+
+- Final grouped setup tool name: `rigol_ds1102e_setup_for_spi_bus_analysis(...)`.
+- The tool replaces ten visible `rigol_ds1102e_write(...)` MCP calls with one MCP call while still sending one SCPI command at a time to the Rigol.
+- Default setup values:
+  - `clock_channel=1`
+  - `data_channel=2`
+  - `delay=0.15`
+  - `clock_vertical_scale=2.0`
+  - `trigger_level=1.28`
+  - `timebase_scale="5.0us"`
+  - `verify=False`
+- Implementation detail:
+  - Uses the managed scope's persistent file descriptor via `self.scope.open()`.
+  - Holds `self.scope._io_lock` around the full setup command series.
+  - Uses direct `os.write(...)` inside the grouped setup sequence to avoid the ten-call MCP round-trip cost.
+- Live verification with `rigol_ds1102e_setup_for_spi_bus_analysis(verify=True)` passed:
+  - CH1 scale `2.000e+00`
+  - trigger level `1.28e+00`
+  - timebase scale `5.000e-06`
+  - trigger sweep `SINGLE`
+  - waveform points mode `RAW`
+  - trigger status `STOP`
