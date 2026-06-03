@@ -16,8 +16,8 @@ MCP tools:
 - `rigol_ds1102e_apply_profile(profile)`
 - `rigol_ds1102e_prepare_to_capture_spi_bus(channels=None, trigger_mode="EDGE", sweep="SINGLE", points_mode="RAW", run=False)`
 - `rigol_ds1102e_data_capture(channels=None, freeze=True, points_mode="RAW", encoding="list")`
-- `rigol_ds1102e_spi_sample_indexes(chan_1=None, chan_2=None, clock_source=None, data_source=None, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10)`
-- `rigol_ds1102e_spi_decode(chan_1=None, chan_2=None, clock_source=None, data_source=None, freeze=True, points_mode="RAW", threshold=5, slope_threshold=10, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, time_scale_margin=1.5)`
+- `rigol_ds1102e_spi_sample_indexes(chan_1=None, chan_2=None, clock_source=None, data_source=None, freeze=True, points_mode="RAW", threshold=5, slope_threshold=5)`
+- `rigol_ds1102e_spi_decode(chan_1=None, chan_2=None, clock_source=None, data_source=None, freeze=True, points_mode="RAW", threshold=5, slope_threshold=5, low_ratio=0.2, high_ratio=0.8, expected_writes=None, expected_addresses=None, window_scan=True, max_extra_edges=16, time_scale=None, time_scale_margin=1.5)`
 - `rigol_ds1102e_scope_io(delay=None, read_size=None)`
 
 For `rigol_ds1102e_protocol_command`, `key` must match a supported command key from `rigol_ds1102e_list_protocol_commands()`. `params` is a JSON object whose fields match that key's `args`. Examples: `{"channel": 1}` for `channel_scale_get`, `{"channel": 1, "scale": 0.5}` for `channel_scale_set`.

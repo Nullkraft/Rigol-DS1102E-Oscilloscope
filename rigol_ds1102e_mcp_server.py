@@ -7,6 +7,8 @@
 # ///
 
 import base64
+import os
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -75,6 +77,18 @@ PROFILE_WAVEFORM_SETTERS = {
 
 DEFAULT_SCOPE_DELAY = 0.2
 DEFAULT_SCOPE_READ_SIZE = 1200000
+DEFAULT_SPI_CLOCK_CHANNEL = 1
+DEFAULT_SPI_DATA_CHANNEL = 2
+DEFAULT_SPI_POINTS_MODE = "RAW"
+DEFAULT_SPI_THRESHOLD = 5
+DEFAULT_SPI_SLOPE_THRESHOLD = 5
+DEFAULT_SPI_LOW_RATIO = 0.2
+DEFAULT_SPI_HIGH_RATIO = 0.8
+DEFAULT_SPI_MAX_EXTRA_EDGES = 16
+DEFAULT_SPI_SETUP_DELAY = 0.15
+DEFAULT_SPI_CLOCK_VERTICAL_SCALE = 2.0
+DEFAULT_SPI_TRIGGER_LEVEL = 1.28
+DEFAULT_SPI_TIMEBASE_SCALE = "5.0us"
 
 
 class ManagedScopeState:
@@ -365,6 +379,46 @@ class ManagedScopeState:
             "status": "ok",
             "writes": writes,
         }
+
+    def scope_setup_for_spi_bus_analysis(
+        self,
+        clock_channel: int,
+        data_channel: int,
+        delay: float,
+        clock_vertical_scale: float,
+        trigger_level: float,
+        timebase_scale: str,
+        verify: bool,
+    ) -> dict[str, Any]:
+        device = self.scope.device
+        setup_commands = (
+            ":STOP",
+            f":CHAN{clock_channel}:DISP ON",
+            f":CHAN{data_channel}:DISP ON",
+            f":CHAN{clock_channel}:SCALe {clock_vertical_scale:.1f}",
+            ":TRIGger:MODE EDGE",
+            f":TRIGger:EDGE:SOURce CHAN{clock_channel}",
+            f":TRIGger:EDGE:LEVel {trigger_level:.2f}",
+            ":TRIGger:EDGE:SWEep SING",
+            ":WAVeform:POINts:MODE RAW",
+            f":TIMebase:SCALe {timebase_scale}",
+        )
+
+        writes: list[dict[str, Any]] = []
+        fd = self.scope.open()
+        for scpi in setup_commands:
+            os.write(fd, RigolDS1102E._normalize_command(scpi))
+            time.sleep(delay)
+            writes.append({"scpi": scpi, "status": "ok"})
+
+        result: dict[str, Any] = {
+            "device": device,
+            "status": "ok",
+            "writes": writes,
+        }
+        if verify:
+            result["verification"] = self.build_scope_config([clock_channel, data_channel])
+        return result
 
     def data_capture(self, channels: list[int], freeze: bool, points_mode: str, encoding: str,) -> dict[str, Any]:
         device = self.scope.device
@@ -876,6 +930,34 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
 
 
 @mcp.tool()
+def scope_setup_for_spi_bus_analysis(
+    clock_channel: int = DEFAULT_SPI_CLOCK_CHANNEL,
+    data_channel: int = DEFAULT_SPI_DATA_CHANNEL,
+    delay: float = DEFAULT_SPI_SETUP_DELAY,
+    clock_vertical_scale: float = DEFAULT_SPI_CLOCK_VERTICAL_SCALE,
+    trigger_level: float = DEFAULT_SPI_TRIGGER_LEVEL,
+    timebase_scale: str = DEFAULT_SPI_TIMEBASE_SCALE,
+    verify: bool = False,
+) -> dict[str, Any]:
+    """Set up the scope for SPI bus analysis using the saTech full-test sequence."""
+    resolved_clock_channel = resolve_scope_channel(clock_channel, "clock_channel")
+    resolved_data_channel = resolve_scope_channel(data_channel, "data_channel")
+    if resolved_clock_channel == resolved_data_channel:
+        raise ValueError("clock_channel and data_channel must be different")
+    if delay < 0:
+        raise ValueError("delay must be non-negative")
+    return _MANAGED_SCOPE.scope_setup_for_spi_bus_analysis(
+        resolved_clock_channel,
+        resolved_data_channel,
+        delay,
+        clock_vertical_scale,
+        trigger_level,
+        timebase_scale,
+        verify,
+    )
+
+
+@mcp.tool()
 def rigol_ds1102e_data_capture(
     channels: list[int] | None = None,
     freeze: bool = True,
@@ -899,9 +981,9 @@ def rigol_ds1102e_spi_sample_indexes(
     clock_source: str | None = None,
     data_source: str | None = None,
     freeze: bool = True,
-    points_mode: str = "RAW",
-    threshold: int = 5,
-    slope_threshold: int = 10,
+    points_mode: str = DEFAULT_SPI_POINTS_MODE,
+    threshold: int = DEFAULT_SPI_THRESHOLD,
+    slope_threshold: int = DEFAULT_SPI_SLOPE_THRESHOLD,
 ) -> dict[str, Any]:
     """Return clock sample indexes for SPI analysis after normalizing both channels."""
     clock_scope_channel, data_scope_channel, source_map = resolve_spi_sources(
@@ -930,15 +1012,15 @@ def rigol_ds1102e_spi_decode(
     clock_source: str | None = None,
     data_source: str | None = None,
     freeze: bool = True,
-    points_mode: str = "RAW",
-    threshold: int = 5,
-    slope_threshold: int = 10,
-    low_ratio: float = 0.2,
-    high_ratio: float = 0.8,
+    points_mode: str = DEFAULT_SPI_POINTS_MODE,
+    threshold: int = DEFAULT_SPI_THRESHOLD,
+    slope_threshold: int = DEFAULT_SPI_SLOPE_THRESHOLD,
+    low_ratio: float = DEFAULT_SPI_LOW_RATIO,
+    high_ratio: float = DEFAULT_SPI_HIGH_RATIO,
     expected_writes: int | None = None,
     expected_addresses: list[int] | None = None,
     window_scan: bool = True,
-    max_extra_edges: int = 16,
+    max_extra_edges: int = DEFAULT_SPI_MAX_EXTRA_EDGES,
     time_scale: float | None = None,
     time_scale_margin: float = 1.5,
 ) -> dict[str, Any]:
