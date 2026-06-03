@@ -146,8 +146,6 @@ class ManagedScopeState:
             status = self.protocol_query("trigger_status").upper()
             if status == "STOP":
                 return status
-            if status == "WAIT":
-                self.protocol_write("stop")
         raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
 
     def capture_waveform_channels(
@@ -572,10 +570,12 @@ _MANAGED_SCOPE = ManagedScopeState()
 VALID_SCOPE_CHANNELS = (1, 2)
 VALID_WAVEFORM_ENCODINGS = ("list", "base64", "hex", "none")
 VALID_SPI_SOURCE_NAMES = ("chan_1", "chan_2")
-VALID_PROFILE_TOP_LEVEL_KEYS = ("device", "identity", "channels", "timebase", "trigger", "acquire", "waveform", "session")
+WRITABLE_PROFILE_TOP_LEVEL_KEYS = ("channels", "timebase", "trigger", "acquire", "waveform", "session")
+READBACK_ONLY_PROFILE_TOP_LEVEL_KEYS = ("device", "identity")
 VALID_PROFILE_TRIGGER_KEYS = ("mode", "source", "level", "sweep", "holdoff")
-VALID_PROFILE_SESSION_KEYS = ("run", "stop", "force_trigger", "trigger_status")
-READ_ONLY_PROFILE_ACQUIRE_KEYS = ("sampling_rate",)
+VALID_PROFILE_SESSION_KEYS = ("run", "stop", "force_trigger")
+READBACK_ONLY_PROFILE_ACQUIRE_KEYS = ("sampling_rate",)
+READBACK_ONLY_PROFILE_SESSION_KEYS = ("trigger_status",)
 
 
 def is_supported_protocol_command(key: str) -> bool:
@@ -624,48 +624,75 @@ def validate_choice(name: str, value: str, allowed: tuple[str, ...],) -> None:
         raise ValueError(f"{name} must be {allowed_text}")
 
 
-def normalize_channels(channels: list[int] | None) -> list[int]:
+def resolve_scope_channels(channels: list[int] | None) -> list[int]:
     selected = channels or [1, 2]
-    normalized = []
+    resolved = []
     for channel in selected:
-        value = int(channel)
-        if value not in VALID_SCOPE_CHANNELS:
-            raise ValueError(f"channel must be 1 or 2, got {value}")
-        if value not in normalized:
-            normalized.append(value)
-    return normalized
+        value = resolve_scope_channel(channel, "channel")
+        if value not in resolved:
+            resolved.append(value)
+    return resolved
 
 
-def normalize_profile(profile: dict[str, Any],) -> dict[str, Any]:
+def extract_writable_profile(profile: dict[str, Any],) -> dict[str, Any]:
+    from_readback = "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict)
     candidate = profile
-    if "normalized_scope_data" in profile and isinstance(profile["normalized_scope_data"], dict):
+    if from_readback:
         candidate = profile["normalized_scope_data"]
+    allowed_top_level_keys = set(WRITABLE_PROFILE_TOP_LEVEL_KEYS)
+    if from_readback:
+        allowed_top_level_keys.update(READBACK_ONLY_PROFILE_TOP_LEVEL_KEYS)
     for section_name in candidate:
-        if section_name not in VALID_PROFILE_TOP_LEVEL_KEYS:
+        if section_name not in allowed_top_level_keys:
             raise ValueError(f"unsupported profile section: {section_name}")
-    normalize_channels(list(candidate.get("channels", {}).keys()))
-    for settings in candidate.get("channels", {}).values():
+
+    writable_profile = {
+        section_name: candidate[section_name]
+        for section_name in WRITABLE_PROFILE_TOP_LEVEL_KEYS
+        if section_name in candidate
+    }
+
+    resolve_scope_channels(list(writable_profile.get("channels", {}).keys()))
+    for settings in writable_profile.get("channels", {}).values():
         for setting_name in settings:
             if setting_name not in PROFILE_CHANNEL_SETTERS:
                 raise ValueError(f"unsupported channel setting: {setting_name}")
-    for setting_name in candidate.get("timebase", {}):
+    for setting_name in writable_profile.get("timebase", {}):
         if setting_name not in PROFILE_TIMEBASE_SETTERS:
             raise ValueError(f"unsupported timebase setting: {setting_name}")
-    for setting_name in candidate.get("trigger", {}):
+    for setting_name in writable_profile.get("trigger", {}):
         if setting_name not in VALID_PROFILE_TRIGGER_KEYS:
             raise ValueError(f"unsupported trigger setting: {setting_name}")
-    for setting_name in candidate.get("acquire", {}):
-        if setting_name in READ_ONLY_PROFILE_ACQUIRE_KEYS:
+    acquire_settings = dict(writable_profile.get("acquire", {}))
+    for setting_name in list(acquire_settings):
+        if setting_name in READBACK_ONLY_PROFILE_ACQUIRE_KEYS:
+            if not from_readback:
+                raise ValueError(f"readback-only acquire setting: {setting_name}")
+            acquire_settings.pop(setting_name)
             continue
         if setting_name not in PROFILE_ACQUIRE_SETTERS:
             raise ValueError(f"unsupported acquire setting: {setting_name}")
-    for setting_name in candidate.get("waveform", {}):
+    if acquire_settings:
+        writable_profile["acquire"] = acquire_settings
+    else:
+        writable_profile.pop("acquire", None)
+    for setting_name in writable_profile.get("waveform", {}):
         if setting_name not in PROFILE_WAVEFORM_SETTERS:
             raise ValueError(f"unsupported waveform setting: {setting_name}")
-    for setting_name in candidate.get("session", {}):
+    session_settings = dict(writable_profile.get("session", {}))
+    for setting_name in list(session_settings):
+        if setting_name in READBACK_ONLY_PROFILE_SESSION_KEYS:
+            if not from_readback:
+                raise ValueError(f"readback-only session setting: {setting_name}")
+            session_settings.pop(setting_name)
+            continue
         if setting_name not in VALID_PROFILE_SESSION_KEYS:
             raise ValueError(f"unsupported session setting: {setting_name}")
-    return candidate
+    if session_settings:
+        writable_profile["session"] = session_settings
+    else:
+        writable_profile.pop("session", None)
+    return writable_profile
 
 
 def validate_waveform_encoding(encoding: str,) -> None:
@@ -673,7 +700,7 @@ def validate_waveform_encoding(encoding: str,) -> None:
         raise ValueError("encoding must be one of: list, base64, hex, none")
 
 
-def normalize_scope_channel(channel: int, name: str) -> int:
+def resolve_scope_channel(channel: int, name: str) -> int:
     value = int(channel)
     if value not in VALID_SCOPE_CHANNELS:
         raise ValueError(f"{name} must be 1 or 2, got {value}")
@@ -687,8 +714,8 @@ def resolve_spi_sources(
     data_source: str | None,
 ) -> tuple[int, int, dict[str, Any]]:
     capture_map = {
-        "chan_1": normalize_scope_channel(1 if chan_1 is None else chan_1, "chan_1"),
-        "chan_2": normalize_scope_channel(2 if chan_2 is None else chan_2, "chan_2"),
+        "chan_1": resolve_scope_channel(1 if chan_1 is None else chan_1, "chan_1"),
+        "chan_2": resolve_scope_channel(2 if chan_2 is None else chan_2, "chan_2"),
     }
     resolved_clock_source = "chan_1" if clock_source is None else str(clock_source)
     resolved_data_source = "chan_2" if data_source is None else str(data_source)
@@ -821,13 +848,13 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 @mcp.tool()
 def rigol_ds1102e_get_scope_config(channels: list[int] | None = None,) -> dict[str, Any]:
     """Read the current scope configuration from the scope."""
-    return _MANAGED_SCOPE.get_scope_config(normalize_channels(channels))
+    return _MANAGED_SCOPE.get_scope_config(resolve_scope_channels(channels))
 
 
 @mcp.tool()
 def rigol_ds1102e_apply_profile(profile: dict[str, Any],) -> dict[str, Any]:
     """Apply multiple setup changes in one request."""
-    return _MANAGED_SCOPE.apply_profile(normalize_profile(profile))
+    return _MANAGED_SCOPE.apply_profile(extract_writable_profile(profile))
 
 
 @mcp.tool()
@@ -840,7 +867,7 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
 ) -> dict[str, Any]:
     """Prepare the scope for single-trigger RAW waveform capture."""
     return _MANAGED_SCOPE.prepare_to_capture_spi_bus(
-        normalize_channels(channels),
+        resolve_scope_channels(channels),
         trigger_mode,
         sweep,
         points_mode,
@@ -858,7 +885,7 @@ def rigol_ds1102e_data_capture(
     """Read currently displayed waveform bytes from selected channels."""
     validate_waveform_encoding(encoding)
     return _MANAGED_SCOPE.data_capture(
-        normalize_channels(channels),
+        resolve_scope_channels(channels),
         freeze,
         points_mode,
         encoding,
