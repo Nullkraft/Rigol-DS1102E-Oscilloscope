@@ -620,7 +620,19 @@ class ManagedScopeState:
             "read_size": scope.read_size,
         }
 
-_MANAGED_SCOPE = ManagedScopeState()
+_MANAGED_SCOPE: ManagedScopeState | None = None
+
+
+def managed_scope() -> ManagedScopeState:
+    """Return the cached scope connection, opening it on first use.
+
+    The MCP server can start before the Rigol is connected because this delays
+    device discovery until a scope-dependent tool is called.
+    """
+    global _MANAGED_SCOPE
+    if _MANAGED_SCOPE is None:
+        _MANAGED_SCOPE = ManagedScopeState()
+    return _MANAGED_SCOPE
 
 VALID_SCOPE_CHANNELS = (1, 2)
 VALID_WAVEFORM_ENCODINGS = ("list", "base64", "hex", "none")
@@ -861,19 +873,19 @@ def list_ports() -> dict[str, Any]:
 @mcp.tool()
 def rigol_ds1102e_identify() -> dict[str, Any]:
     """Query *IDN? from the scope."""
-    return _MANAGED_SCOPE.identify()
+    return managed_scope().identify()
 
 
 @mcp.tool()
 def rigol_ds1102e_query(scpi: str,) -> dict[str, Any]:
     """Send a SCPI query and return the response."""
-    return _MANAGED_SCOPE.query(scpi)
+    return managed_scope().query(scpi)
 
 
 @mcp.tool()
 def rigol_ds1102e_write(scpi: str,) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
-    return _MANAGED_SCOPE.write(scpi)
+    return managed_scope().write(scpi)
 
 
 @mcp.tool()
@@ -903,13 +915,13 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 @mcp.tool()
 def rigol_ds1102e_get_scope_config(channels: list[int] | None = None,) -> dict[str, Any]:
     """Read the current scope configuration from the scope."""
-    return _MANAGED_SCOPE.get_scope_config(resolve_scope_channels(channels))
+    return managed_scope().get_scope_config(resolve_scope_channels(channels))
 
 
 @mcp.tool()
 def rigol_ds1102e_apply_profile(profile: dict[str, Any],) -> dict[str, Any]:
     """Apply multiple setup changes in one request."""
-    return _MANAGED_SCOPE.apply_profile(extract_writable_profile(profile))
+    return managed_scope().apply_profile(extract_writable_profile(profile))
 
 
 @mcp.tool()
@@ -921,7 +933,7 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
     run: bool = False,
 ) -> dict[str, Any]:
     """Prepare the scope for single-trigger RAW waveform capture."""
-    return _MANAGED_SCOPE.prepare_to_capture_spi_bus(
+    return managed_scope().prepare_to_capture_spi_bus(
         resolve_scope_channels(channels),
         trigger_mode,
         sweep,
@@ -947,7 +959,7 @@ def rigol_ds1102e_setup_for_spi_bus_analysis(
         raise ValueError("clock_channel and data_channel must be different")
     if delay < 0:
         raise ValueError("delay must be non-negative")
-    return _MANAGED_SCOPE.scope_setup_for_spi_bus_analysis(
+    return managed_scope().scope_setup_for_spi_bus_analysis(
         resolved_clock_channel,
         resolved_data_channel,
         delay,
@@ -967,7 +979,7 @@ def rigol_ds1102e_data_capture(
 ) -> dict[str, Any]:
     """Read currently displayed waveform bytes from selected channels."""
     validate_waveform_encoding(encoding)
-    return _MANAGED_SCOPE.data_capture(
+    return managed_scope().data_capture(
         resolve_scope_channels(channels),
         freeze,
         points_mode,
@@ -994,7 +1006,7 @@ def rigol_ds1102e_spi_sample_indexes(
         data_source,
     )
     validate_spi_sample_indexes_request(threshold, slope_threshold)
-    result = _MANAGED_SCOPE.spi_sample_indexes(
+    result = managed_scope().spi_sample_indexes(
         clock_scope_channel,
         data_scope_channel,
         freeze,
@@ -1043,7 +1055,7 @@ def rigol_ds1102e_spi_decode(
         time_scale,
         time_scale_margin,
     )
-    result = _MANAGED_SCOPE.spi_decode(
+    result = managed_scope().spi_decode(
         clock_scope_channel,
         data_scope_channel,
         freeze,
@@ -1070,14 +1082,14 @@ def rigol_ds1102e_protocol_command(
 ) -> dict[str, Any]:
     """Execute a supported protocol command by key using the registry metadata."""
     validate_protocol_command_request(key)
-    return _MANAGED_SCOPE.protocol_command(key, params)
+    return managed_scope().protocol_command(key, params)
 
 
 @mcp.tool()
 def rigol_ds1102e_scope_io(delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
     """Get or update the managed scope query delay and read size."""
     validate_scope_io_request(delay, read_size)
-    return _MANAGED_SCOPE.scope_io(delay, read_size)
+    return managed_scope().scope_io(delay, read_size)
 
 
 def main() -> None:
