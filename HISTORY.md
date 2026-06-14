@@ -179,3 +179,126 @@ BK390A reading and AD8307 dB conversion - 2026-06-03
 - AD8307 conversion:
   - `Vout_mV = 616.0`
   - `Pin_dBm = (616.0 / 25) - 84 = -59.36 dBm`
+
+Variable RFin SPI verification - 2026-06-03
+
+- Proved that `fulltest plan` can use a variable RFin value by running:
+  - `fulltest plan 2365.913`
+- Plan response:
+  - `rfin_mhz=2365.913`
+  - LO1 frequency `1254.000 MHz`, `M=4095`, `F=0`, `N=76`, `DIVA=4`, injection `Low`
+  - LO2 frequency `3934.913 MHz`, `M=4062`, `F=2518`, `N=59`, `DIVA=1`, injection `High`
+- Re-ran the routine with SPI capture and register verification:
+  - Opened persistent `saTech` technician-console session on `/dev/ttyUSB1`.
+  - Set up the scope with `rigol_ds1102e_setup_for_spi_bus_analysis(verify=True)`.
+  - Primed dirty state with `RFin 123.345`.
+  - Staged the variable plan with `fulltest plan 2365.913`.
+- LO1 capture:
+  - Armed the scope with `:RUN`.
+  - Scope status before program: `WAIT`.
+  - Sent `fulltest program lo1`.
+  - Scope status after program: `STOP`.
+  - Decoded dirty writes: `R4 0x63AE81DC`, `R0 0x00260000`.
+  - Expected dirty writes: `R4 0x63AE81DC`, `R0 0x00260000`.
+  - Result: PASS.
+- LO2 capture:
+  - Armed the scope with `:RUN`.
+  - Scope status before program: `WAIT`.
+  - Sent `fulltest program lo2`.
+  - Scope status after program: `STOP`.
+  - Decoded dirty writes: `R1 0x40017EF1`, `R0 0x001DCEB0`.
+  - Expected dirty writes from firmware-reported fields: `R1 0x40017EF1`, `R0 0x001DCEB0`.
+  - Result: PASS.
+- Expectation-model correction:
+  - `fulltest plan` calls `freq2FMN(...)` and stages FMN fields before `fulltest program` calls `setFrequency(...)`.
+  - Therefore, using `max2871_expected.py previous_frequency target_frequency` directly is not always the correct expected-write model for this routine.
+  - For the variable-RFin run, the decoded LO2 words matched the firmware-reported `M=4062`, `F=2518`, `N=59`, `DIVA=1`.
+- Closed the held `saTech` technician-console session after the run.
+
+`Verify <MHz>` checklist - 2026-06-03
+
+Purpose:
+
+- Use a single frequency target, for example `Verify 673.975`, to run the full hardware verification routine from SA plan staging through SPI dirty-register verification and final RF power reporting.
+
+Input:
+
+- `target_mhz`: requested SA RFin target in MHz, valid over the full `0.0` to `3000.0` MHz RFin range.
+
+Checklist:
+
+- Resolve the SA technician-console port as the CP2102N USB-to-UART device, unless the user provides a different SA port.
+- Open one persistent `saTech` technician-console serial session on that port at `115200` baud and keep it open for the full routine.
+- After opening the SA session, wait `3.0` seconds, clear the startup buffer, and drain serial input until quiet before sending commands.
+- In the held SA session, send `id` and require the expected ID text `saTech WN2A ready` before proceeding.
+- Treat these SA-session facts as derived from the `saTech` host workflow, not from ad hoc repo search:
+  - open the technician console at `115200` baud
+  - wait `3.0` seconds after opening
+  - clear the startup buffer and drain until quiet
+  - require `id` to report `saTech WN2A ready`
+  - derive expected dirty-register writes from firmware-staged plan fields
+- Use Rigol MCP `list_ports()` once per Codex session to resolve the DS1102E device path.
+- Set up the scope with Rigol MCP `rigol_ds1102e_setup_for_spi_bus_analysis(verify=True)`.
+- Require final scope setup verification to pass:
+  - CH1 display on.
+  - CH2 display on.
+  - CH1 scale `2.0`.
+  - trigger mode edge.
+  - trigger source CH1.
+  - trigger level `1.28`.
+  - trigger sweep single.
+  - waveform points mode `RAW`.
+  - timebase scale `5.0us`.
+- In the held SA session, send `RFin 123.345` to force a known dirty-register starting point.
+- In the held SA session, send `fulltest plan <target_mhz>`.
+- Record the plan output:
+  - `rfin_mhz`.
+  - LO1 frequency, injection, `M`, `F`, `N`, `DIVA`.
+  - LO2 frequency, injection, `M`, `F`, `N`, `DIVA`.
+- Build the expected dirty-register model from the firmware-staged plan fields, not just from previous-frequency to target-frequency math.
+- Arm the scope for LO1 with Rigol MCP `rigol_ds1102e_write(scpi=":RUN")`.
+- Confirm the scope is armed and waiting.
+- In the held SA session, send `fulltest program lo1`.
+- Confirm the scope stopped.
+- Decode the stopped SPI waveform.
+- Compare decoded LO1 SPI writes with the expected dirty MAX2871 register writes.
+- Mark LO1 PASS only when the decoded register addresses and 32-bit values match the expected dirty writes.
+- Arm the scope for LO2 with Rigol MCP `rigol_ds1102e_write(scpi=":RUN")`.
+- Confirm the scope is armed and waiting.
+- In the held SA session, send `fulltest program lo2`.
+- Confirm the scope stopped.
+- Decode the stopped SPI waveform.
+- Compare decoded LO2 SPI writes with the expected dirty MAX2871 register writes.
+- Mark LO2 PASS only when the decoded register addresses and 32-bit values match the expected dirty writes.
+- Use BK390A MCP `list_ports()` once per Codex session to resolve the meter port.
+- Read the BK390A with `bk390a_read(require_stable=True, max_frames=6, timeout_s=2.0)`.
+- Require a stable DC-voltage reading.
+- Convert the AD8307 reading to dBm:
+  - `Vout_mV = measurement.value * 1000`.
+  - `Pin_dBm = (Vout_mV / 25) - 84`.
+- Close the held `saTech` technician-console session after the routine completes.
+
+Required final report:
+
+- Requested `target_mhz`.
+- Resolved Rigol device path.
+- Resolved BK390A port.
+- SA console port.
+- Scope setup verification result.
+- `RFin 123.345` response.
+- `fulltest plan <target_mhz>` response.
+- LO1 expected dirty registers.
+- LO1 decoded dirty registers.
+- LO1 pass/fail result.
+- LO2 expected dirty registers.
+- LO2 decoded dirty registers.
+- LO2 pass/fail result.
+- BK390A raw frame and decoded voltage.
+- AD8307 dBm conversion.
+- Overall PASS only when scope setup, LO1 SPI verification, LO2 SPI verification, and BK390A conversion all complete successfully.
+
+Project folder rename - 2026-06-14
+
+- Renamed the local project folder from `Rigol-DS1102E-Oscilloscope` to `Rigol-DS1102E-Oscope-MCP`.
+- Updated the global Codex MCP configuration in `/home/mark/.codex/config.toml` so `mcp_servers.rigol_ds1102e` launches `rigol_ds1102e_mcp_server.py` from the renamed folder.
+- Restarted the Codex session and confirmed the Rigol MCP server restarted from the renamed project path.
