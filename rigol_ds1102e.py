@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 
 import argparse
-import glob
 import os
+from pathlib import Path
+import sys
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "SA-Technician-MCP"))
+from hardware_ports import USBTMC_GLOB_PATTERNS, list_usbtmc_devices
 
-DEFAULT_GLOB_PATTERNS = (
-    "/dev/usbtmc*",
-    "/dev/usbmisc/usbtmc*",
-    "/dev/usb/usbtmc*",
-)
+DEFAULT_GLOB_PATTERNS = USBTMC_GLOB_PATTERNS
 RIGOL_DS1102E_IDN_PREFIX = "RIGOL TECHNOLOGIES,DS1102E"
 
 
@@ -87,10 +86,7 @@ class RigolDS1102E:
 
 
 def list_candidate_devices():
-    devices = []
-    for pattern in DEFAULT_GLOB_PATTERNS:
-        devices.extend(glob.glob(pattern))
-    return sorted(set(devices))
+    return list_usbtmc_devices()
 
 
 def discover_ds1102e_device(query_delay=0.2, read_size=4096):
