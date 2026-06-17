@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "SA-Technician-MCP"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hardware-mcp-common"))
 from hardware_ports import USBTMC_GLOB_PATTERNS, list_usbtmc_devices
 
 DEFAULT_GLOB_PATTERNS = USBTMC_GLOB_PATTERNS
