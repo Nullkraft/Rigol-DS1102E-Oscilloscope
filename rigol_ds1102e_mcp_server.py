@@ -7,12 +7,16 @@
 # ///
 
 import base64
+import functools
 import os
+import re
+import threading
 import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from rigol_ds1102e_acceptable_scpi_commands import ACCEPTABLE_SCPI_COMMANDS
 from rigol_ds1102e import (
     DEFAULT_GLOB_PATTERNS,
     RigolDS1102E,
@@ -29,7 +33,11 @@ from rigol_ds1102e_spi_analysis import (
 )
 
 
-mcp = FastMCP("rigol_ds1102e", json_response=True)
+mcp = FastMCP(
+    "rigol_ds1102e",
+    json_response=True,
+    instructions="Call one Rigol MCP tool at a time. Parallel Rigol MCP calls are not supported.",
+)
 
 SCOPE_CONFIG_CHANNEL_KEYS = (
     ("display", "channel_display_get"),
@@ -89,6 +97,75 @@ DEFAULT_SPI_SETUP_DELAY = 0.15
 DEFAULT_SPI_CLOCK_VERTICAL_SCALE = 2.0
 DEFAULT_SPI_TRIGGER_LEVEL = 1.28
 DEFAULT_SPI_TIMEBASE_SCALE = "5.0us"
+PARALLEL_CALL_ERROR = "Rigol MCP calls must be made one at a time; parallel Rigol calls will not work. Wait for the current call to finish and retry."
+
+
+def _build_scpi_mnemonic_pattern(text: str) -> str:
+    parts = re.split(r"([A-Za-z]+)", text)
+    pattern = ""
+    for part in parts:
+        if not part:
+            continue
+        if not part.isalpha():
+            pattern += re.escape(part)
+            continue
+        if any(char.islower() for char in part):
+            mandatory = "".join(char for char in part if char.isupper())
+            optional = "".join(char for char in part if char.islower())
+            pattern += re.escape(mandatory)
+            if optional:
+                pattern += "(?:" + "".join(f"[{char.lower()}{char.upper()}]" for char in optional) + ")?"
+            continue
+        pattern += re.escape(part) + r"(?:[a-z]+)?"
+    return pattern
+
+
+def _build_scpi_template_pattern(template: str) -> re.Pattern[str]:
+    parts = re.split(r"(\{[a-zA-Z_][a-zA-Z0-9_]*\})", template)
+    pattern = ""
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("{") and part.endswith("}"):
+            pattern += r"[^ ]+"
+        else:
+            pattern += _build_scpi_mnemonic_pattern(part)
+    return re.compile(rf"^{pattern}$", re.IGNORECASE)
+
+
+ACCEPTABLE_SCPI_PATTERNS = tuple(
+    (template, _build_scpi_template_pattern(template))
+    for template in ACCEPTABLE_SCPI_COMMANDS
+)
+MCP_TOOL_CALL_LOCK = threading.Lock()
+
+
+def normalize_scpi_command_text(scpi: str) -> str:
+    return " ".join(scpi.strip().split())
+
+
+def validate_acceptable_scpi_command(scpi: str) -> str:
+    normalized = normalize_scpi_command_text(scpi)
+    for template, pattern in ACCEPTABLE_SCPI_PATTERNS:
+        if pattern.fullmatch(normalized):
+            return normalized
+    raise ValueError(
+        "unsupported SCPI command for Rigol MCP: "
+        f"{normalized!r}. Use a supported command template."
+    )
+
+
+def require_single_tool_call(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not MCP_TOOL_CALL_LOCK.acquire(blocking=False):
+            raise RuntimeError(PARALLEL_CALL_ERROR)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            MCP_TOOL_CALL_LOCK.release()
+
+    return wrapper
 
 
 class ManagedScopeState:
@@ -111,6 +188,7 @@ class ManagedScopeState:
         return self.scope
 
     def scope_write(self, scpi: str) -> None:
+        scpi = validate_acceptable_scpi_command(scpi)
         try:
             self.scope.write(scpi)
         except OSError:
@@ -118,6 +196,7 @@ class ManagedScopeState:
             self.scope.write(scpi)
 
     def scope_query_bytes(self, scpi: str) -> bytes:
+        scpi = validate_acceptable_scpi_command(scpi)
         try:
             return self.scope.query_bytes(scpi)
         except OSError:
@@ -408,9 +487,10 @@ class ManagedScopeState:
         with self.scope._io_lock:
             fd = self.scope.open()      # Creates or returns already open port
             for scpi in setup_commands:
-                os.write(fd, RigolDS1102E._normalize_command(scpi))
+                normalized_scpi = validate_acceptable_scpi_command(scpi)
+                os.write(fd, RigolDS1102E._normalize_command(normalized_scpi))
                 time.sleep(delay)
-                writes.append({"scpi": scpi, "status": "ok"})
+                writes.append({"scpi": normalized_scpi, "status": "ok"})
 
         result: dict[str, Any] = {
             "device": device,
@@ -855,6 +935,7 @@ def validate_spi_decode_request(
 
 
 @mcp.tool()
+@require_single_tool_call
 def list_ports() -> dict[str, Any]:
     """List likely USBTMC device nodes for the Rigol DS1102E."""
     discovered_ds1102e_device: str | None
@@ -873,24 +954,28 @@ def list_ports() -> dict[str, Any]:
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_identify() -> dict[str, Any]:
     """Query *IDN? from the scope."""
     return managed_scope().identify()
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_query(scpi: str,) -> dict[str, Any]:
     """Send a SCPI query and return the response."""
     return managed_scope().query(scpi)
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_write(scpi: str,) -> dict[str, Any]:
     """Send a SCPI command that does not expect a response."""
     return managed_scope().write(scpi)
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
     """List supported protocol command keys from the existing registry."""
     commands = []
@@ -915,18 +1000,21 @@ def rigol_ds1102e_list_protocol_commands() -> dict[str, Any]:
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_get_scope_config(channels: list[int] | None = None,) -> dict[str, Any]:
     """Read the current scope configuration from the scope."""
     return managed_scope().get_scope_config(resolve_scope_channels(channels))
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_apply_profile(profile: dict[str, Any],) -> dict[str, Any]:
     """Apply multiple setup changes in one request."""
     return managed_scope().apply_profile(extract_writable_profile(profile))
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_prepare_to_capture_spi_bus(
     channels: list[int] | None = None,
     trigger_mode: str = "EDGE",
@@ -945,6 +1033,7 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_setup_for_spi_bus_analysis(
     clock_channel: int = DEFAULT_SPI_CLOCK_CHANNEL,
     data_channel: int = DEFAULT_SPI_DATA_CHANNEL,
@@ -973,6 +1062,7 @@ def rigol_ds1102e_setup_for_spi_bus_analysis(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_data_capture(
     channels: list[int] | None = None,
     freeze: bool = True,
@@ -990,6 +1080,7 @@ def rigol_ds1102e_data_capture(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_spi_sample_indexes(
     chan_1: int | None = None,
     chan_2: int | None = None,
@@ -1021,6 +1112,7 @@ def rigol_ds1102e_spi_sample_indexes(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_spi_decode(
     chan_1: int | None = None,
     chan_2: int | None = None,
@@ -1078,6 +1170,7 @@ def rigol_ds1102e_spi_decode(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_protocol_command(
     key: str,
     params: dict[str, Any] | None = None,
@@ -1088,6 +1181,7 @@ def rigol_ds1102e_protocol_command(
 
 
 @mcp.tool()
+@require_single_tool_call
 def rigol_ds1102e_scope_io(delay: float | None = None, read_size: int | None = None,) -> dict[str, Any]:
     """Get or update the managed scope query delay and read size."""
     validate_scope_io_request(delay, read_size)
