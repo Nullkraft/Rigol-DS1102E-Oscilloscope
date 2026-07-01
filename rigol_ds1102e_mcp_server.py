@@ -80,8 +80,8 @@ DEFAULT_SCOPE_READ_SIZE = 1200000
 DEFAULT_SPI_CLOCK_CHANNEL = 1
 DEFAULT_SPI_DATA_CHANNEL = 2
 DEFAULT_SPI_POINTS_MODE = "RAW"
-DEFAULT_SPI_THRESHOLD = 5
-DEFAULT_SPI_SLOPE_THRESHOLD = 5
+DEFAULT_SPI_CLOCK_LOW_RATIO = 0.3
+DEFAULT_SPI_CLOCK_HIGH_RATIO = 0.6
 DEFAULT_SPI_LOW_RATIO = 0.2
 DEFAULT_SPI_HIGH_RATIO = 0.8
 DEFAULT_SPI_MAX_EXTRA_EDGES = 16
@@ -452,8 +452,8 @@ class ManagedScopeState:
         data_scope_channel: int,
         freeze: bool,
         points_mode: str,
-        threshold: int,
-        slope_threshold: int,
+        clock_low_ratio: float,
+        clock_high_ratio: float,
     ) -> dict[str, Any]:
         device = self.scope.device
         writes, raw_channels = self.capture_waveform_channels(
@@ -466,8 +466,8 @@ class ManagedScopeState:
         data_samples = normalize_waveform_samples(raw_channels[str(data_scope_channel)])
         sample_indexes = detect_rising_edge_sample_indexes(
             clock_samples,
-            threshold=threshold,
-            slope_threshold=slope_threshold,
+            low_ratio=clock_low_ratio,
+            high_ratio=clock_high_ratio,
         )
 
         return {
@@ -476,8 +476,8 @@ class ManagedScopeState:
             "writes": writes,
             "clock_scope_channel": clock_scope_channel,
             "data_scope_channel": data_scope_channel,
-            "threshold": threshold,
-            "slope_threshold": slope_threshold,
+            "clock_low_ratio": clock_low_ratio,
+            "clock_high_ratio": clock_high_ratio,
             "sample_indexes": sample_indexes,
             "clock_samples": {
                 "length": len(clock_samples),
@@ -497,8 +497,8 @@ class ManagedScopeState:
         data_scope_channel: int,
         freeze: bool,
         points_mode: str,
-        threshold: int,
-        slope_threshold: int,
+        clock_low_ratio: float,
+        clock_high_ratio: float,
         low_ratio: float,
         high_ratio: float,
         expected_writes: int | None,
@@ -530,8 +530,8 @@ class ManagedScopeState:
         data_samples = normalize_waveform_samples(raw_channels[str(data_scope_channel)])
         sample_indexes = detect_rising_edge_sample_indexes(
             clock_samples,
-            threshold=threshold,
-            slope_threshold=slope_threshold,
+            low_ratio=clock_low_ratio,
+            high_ratio=clock_high_ratio,
         )
 
         if expected_writes is not None and window_scan:
@@ -563,8 +563,8 @@ class ManagedScopeState:
             "writes": writes,
             "clock_scope_channel": clock_scope_channel,
             "data_scope_channel": data_scope_channel,
-            "threshold": threshold,
-            "slope_threshold": slope_threshold,
+            "clock_low_ratio": clock_low_ratio,
+            "clock_high_ratio": clock_high_ratio,
             "low_ratio": low_ratio,
             "high_ratio": high_ratio,
             "expected_writes": expected_writes,
@@ -814,14 +814,16 @@ def validate_scope_io_request(delay: float | None, read_size: int | None,) -> No
         raise ValueError("read_size must be at least 1")
 
 
-def validate_spi_sample_indexes_request(threshold: int, slope_threshold: int,) -> None:
-    validate_integer_range("threshold", threshold, 1, 20)
-    validate_integer_range("slope_threshold", slope_threshold, 1, 20)
+def validate_spi_sample_indexes_request(clock_low_ratio: float, clock_high_ratio: float,) -> None:
+    validate_float_range("clock_low_ratio", clock_low_ratio, 0.05, 0.45)
+    validate_float_range("clock_high_ratio", clock_high_ratio, 0.55, 0.95)
+    if clock_low_ratio >= clock_high_ratio:
+        raise ValueError("clock_low_ratio must be less than clock_high_ratio")
 
 
 def validate_spi_decode_request(
-    threshold: int,
-    slope_threshold: int,
+    clock_low_ratio: float,
+    clock_high_ratio: float,
     low_ratio: float,
     high_ratio: float,
     expected_writes: int | None,
@@ -830,7 +832,7 @@ def validate_spi_decode_request(
     time_scale: float | None,
     time_scale_margin: float,
 ) -> list[int] | None:
-    validate_spi_sample_indexes_request(threshold, slope_threshold)
+    validate_spi_sample_indexes_request(clock_low_ratio, clock_high_ratio)
     validate_float_range("low_ratio", low_ratio, 0.05, 0.4)
     validate_float_range("high_ratio", high_ratio, 0.6, 0.95)
     if expected_writes is not None:
@@ -995,8 +997,8 @@ def rigol_ds1102e_spi_sample_indexes(
     data_source: str | None = None,
     freeze: bool = True,
     points_mode: str = DEFAULT_SPI_POINTS_MODE,
-    threshold: int = DEFAULT_SPI_THRESHOLD,
-    slope_threshold: int = DEFAULT_SPI_SLOPE_THRESHOLD,
+    clock_low_ratio: float = DEFAULT_SPI_CLOCK_LOW_RATIO,
+    clock_high_ratio: float = DEFAULT_SPI_CLOCK_HIGH_RATIO,
 ) -> dict[str, Any]:
     """Return clock sample indexes for SPI analysis after normalizing both channels."""
     clock_scope_channel, data_scope_channel, source_map = resolve_spi_sources(
@@ -1005,14 +1007,14 @@ def rigol_ds1102e_spi_sample_indexes(
         clock_source,
         data_source,
     )
-    validate_spi_sample_indexes_request(threshold, slope_threshold)
+    validate_spi_sample_indexes_request(clock_low_ratio, clock_high_ratio)
     result = managed_scope().spi_sample_indexes(
         clock_scope_channel,
         data_scope_channel,
         freeze,
         points_mode,
-        threshold,
-        slope_threshold,
+        clock_low_ratio,
+        clock_high_ratio,
     )
     result.update(source_map)
     return result
@@ -1026,8 +1028,8 @@ def rigol_ds1102e_spi_decode(
     data_source: str | None = None,
     freeze: bool = True,
     points_mode: str = DEFAULT_SPI_POINTS_MODE,
-    threshold: int = DEFAULT_SPI_THRESHOLD,
-    slope_threshold: int = DEFAULT_SPI_SLOPE_THRESHOLD,
+    clock_low_ratio: float = DEFAULT_SPI_CLOCK_LOW_RATIO,
+    clock_high_ratio: float = DEFAULT_SPI_CLOCK_HIGH_RATIO,
     low_ratio: float = DEFAULT_SPI_LOW_RATIO,
     high_ratio: float = DEFAULT_SPI_HIGH_RATIO,
     expected_writes: int | None = None,
@@ -1045,8 +1047,8 @@ def rigol_ds1102e_spi_decode(
         data_source,
     )
     normalized_addresses = validate_spi_decode_request(
-        threshold,
-        slope_threshold,
+        clock_low_ratio,
+        clock_high_ratio,
         low_ratio,
         high_ratio,
         expected_writes,
@@ -1060,8 +1062,8 @@ def rigol_ds1102e_spi_decode(
         data_scope_channel,
         freeze,
         points_mode,
-        threshold,
-        slope_threshold,
+        clock_low_ratio,
+        clock_high_ratio,
         low_ratio,
         high_ratio,
         expected_writes,

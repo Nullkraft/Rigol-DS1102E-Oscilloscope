@@ -35,7 +35,7 @@ The server process owns one active scope object. Tool calls operate on that obje
 - scope config readback
 - profile application
 - waveform capture
-- SPI sample-index and decode helpers
+- Hysteresis-based SPI sample-index and decode helpers
 
 MCP tool functions own:
 

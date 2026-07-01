@@ -1,5 +1,15 @@
 Understood. The persistent port is for the `saTech` technician console, not for the Rigol.
 
+SPI clock hysteresis detection - 2026-07-01
+
+- Updated the SPI clock detector to use low/high hysteresis on the normalized inverted clock waveform instead of slope-threshold edge counting.
+- Exposed the detector controls as `clock_low_ratio` and `clock_high_ratio`.
+- This change was made because visually clean 32-edge captures could decode inconsistently across time scales when using the slope-based detector.
+- The validated default detector settings are:
+  - `clock_low_ratio = 0.3`
+  - `clock_high_ratio = 0.6`
+- Repository documentation should treat hysteresis-based clock detection as the current SPI decode method.
+
 So the test routine has three coordinated parts:
 
 1. `saTech` technician console

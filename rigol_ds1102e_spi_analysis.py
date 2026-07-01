@@ -25,32 +25,39 @@ def normalize_waveform_samples(samples: Sequence[int]) -> list[int]:
 
 def detect_rising_edge_sample_indexes(
     samples: Sequence[int],
-    threshold: int = 5,
-    slope_threshold: int = 10,
+    low_ratio: float = 0.3,
+    high_ratio: float = 0.6,
 ) -> list[int]:
     values = _as_int_array(samples)
-    filtered_indexes = np.flatnonzero(values > threshold)
-    if filtered_indexes.size < 3:
+    if values.size == 0:
         return []
 
-    filtered_values = values[filtered_indexes]
-    slopes = np.round(np.diff(filtered_values) / np.diff(filtered_indexes))
-    if slopes.size < 2:
-        return []
+    maximum = int(values.max())
+    low_threshold = low_ratio * maximum
+    high_threshold = high_ratio * maximum
+    armed = int(values[0]) <= low_threshold
+    edge_indexes: list[int] = []
 
-    edge_indexes = np.flatnonzero((slopes[:-1] >= slope_threshold) & (slopes[1:] < slope_threshold)) + 1
-    return filtered_indexes[edge_indexes].tolist()
+    for index in range(1, values.size):
+        sample = int(values[index])
+        if armed and sample >= high_threshold:
+            edge_indexes.append(index)
+            armed = False
+        elif not armed and sample <= low_threshold:
+            armed = True
+
+    return edge_indexes
 
 
 def normalize_and_detect_rising_edge_sample_indexes(
     clock_samples: Sequence[int],
-    threshold: int = 5,
-    slope_threshold: int = 10,
+    low_ratio: float = 0.3,
+    high_ratio: float = 0.6,
 ) -> list[int]:
     return detect_rising_edge_sample_indexes(
         normalize_waveform_samples(clock_samples),
-        threshold=threshold,
-        slope_threshold=slope_threshold,
+        low_ratio=low_ratio,
+        high_ratio=high_ratio,
     )
 
 
