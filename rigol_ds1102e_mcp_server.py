@@ -241,6 +241,14 @@ class ManagedScopeState:
                 return status
         raise RuntimeError(f"scope did not enter STOP state after :STOP; last status was {status!r}")
 
+    def require_waiting_scope(self, attempts: int = 20) -> str:
+        status = ""
+        for _ in range(attempts):
+            status = self.protocol_query("trigger_status").upper()
+            if status == "WAIT":
+                return status
+        raise RuntimeError(f"scope did not enter WAIT state after :RUN; last status was {status!r}")
+
     def capture_waveform_channels(
         self,
         selected_channels: list[int],
@@ -457,6 +465,17 @@ class ManagedScopeState:
             "device": device,
             "status": "ok",
             "writes": writes,
+        }
+
+    def arm_spi_capture(self) -> dict[str, Any]:
+        device = self.scope.device
+        scpi = self.protocol_write("run")
+        status = self.require_waiting_scope()
+        return {
+            "device": device,
+            "status": "ok",
+            "writes": [{"key": "run", "params": {}, "scpi": scpi}],
+            "trigger_status": status,
         }
 
     def scope_setup_for_spi_bus_analysis(
@@ -1030,6 +1049,13 @@ def rigol_ds1102e_prepare_to_capture_spi_bus(
         points_mode,
         run,
     )
+
+
+@mcp.tool()
+@require_single_tool_call
+def rigol_ds1102e_arm_spi_capture() -> dict[str, Any]:
+    """Arm a previously configured single-trigger SPI capture and require WAIT."""
+    return managed_scope().arm_spi_capture()
 
 
 @mcp.tool()
