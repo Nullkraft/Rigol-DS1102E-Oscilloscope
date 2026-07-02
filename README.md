@@ -1,4 +1,4 @@
-# Rigol-DS1102E-Oscilloscope
+# Rigol-DS1102E-Oscope-MCP
 
 If you get a reading with no numbers, use `rigol_ds1102e_protocol_command` with `key="auto_setup"` or send `:AUTO`.
 
