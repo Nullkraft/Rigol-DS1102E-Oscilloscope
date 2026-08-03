@@ -19,7 +19,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcp-shared"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Shared-MCP"))
 from list_tools import build_list_tools_response
 
 from rigol_ds1102e_acceptable_scpi_commands import ACCEPTABLE_SCPI_COMMANDS
