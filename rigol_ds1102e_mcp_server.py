@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.12,<3.13"
+# requires-python = ">=3.14,<3.15"
 # dependencies = [
-#   "mcp[cli]==1.28.1",
+#   "mcp[cli]==2.1.1",
 #   "numpy",
 # ]
 # ///
@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Shared-MCP"))
 from list_tools import build_list_tools_response
@@ -39,9 +39,8 @@ from rigol_ds1102e_spi_analysis import (
 )
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "rigol_ds1102e",
-    json_response=True,
     instructions="Call one Rigol MCP tool at a time. Parallel Rigol MCP calls are not supported.",
 )
 
